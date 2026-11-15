@@ -7,7 +7,7 @@
 
 | # | Plan | Hasil | Status |
 |---|------|-------|--------|
-| 1 | Core CLI agent | Binary yang bisa ngobrol, pakai `terminal` + tool file, simpan sesi di SQLite | siap dieksekusi |
+| 1 | Core CLI agent | Binary yang bisa ngobrol, pakai `terminal` + tool file, simpan sesi di SQLite | selesai (commit d77a4c3) |
 | 2 | Telegram | DM bot, streaming, inline approval, dedup, interrupt | belum ditulis |
 | 3 | Memory, skills, compression | `MEMORY.md`/`USER.md`, skills dua lapis + `--global`, kompaksi, `/usage` | belum ditulis |
 | 4 | Provider lain, cron, delegate, MCP | `custom` provider, stub folder, scheduler, subagent, MCP + plugin | belum ditulis |
