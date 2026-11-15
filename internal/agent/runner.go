@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"renstra/internal/memory"
 	"renstra/internal/provider"
+	"renstra/internal/skill"
 	"renstra/internal/store"
 	"renstra/internal/tool"
 )
@@ -22,15 +24,20 @@ const (
 )
 
 type Runner struct {
-	Provider  provider.Provider
-	Tools     *tool.Registry
-	Store     *store.Store
-	Model     string
-	Cwd       string
-	MaxIters  int
-	MaxTokens int
-	Approve   func(ctx context.Context, name string, args json.RawMessage) (bool, error)
-	Out       io.Writer
+	Provider     provider.Provider
+	Tools        *tool.Registry
+	Store        *store.Store
+	Model        string
+	Cwd          string
+	MaxIters     int
+	MaxTokens    int
+	Memory       *memory.Store
+	Skills       *skill.Registry
+	Approve      func(ctx context.Context, name string, args json.RawMessage) (bool, error)
+	Out          io.Writer
+	PriceIn      float64 // USD per 1M tokens
+	PriceOut     float64 // USD per 1M tokens
+	SubagentCall func(ctx context.Context, task string) (string, error)
 
 	mu           sync.Mutex
 	cachedPrompt string
@@ -69,10 +76,14 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 		var text strings.Builder
 		var calls []provider.ToolCall
 		var streamErr error
+		var usage *provider.Usage
 
 		for ev := range ch {
 			if ev.Err != nil && streamErr == nil {
 				streamErr = ev.Err
+			}
+			if ev.Usage != nil {
+				usage = ev.Usage
 			}
 			if ev.Text != "" {
 				text.WriteString(ev.Text)
@@ -104,6 +115,10 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 			return "", err
 		}
 		history = append(history, assistant)
+
+		if usage != nil {
+			r.recordUsage(usage)
+		}
 
 		if len(calls) == 0 {
 			return text.String(), nil
@@ -166,6 +181,14 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 	return truncated
 }
 
+// recordUsage accumulates token counts and estimated cost for today.
+func (r *Runner) recordUsage(u *provider.Usage) {
+	cost := (float64(u.InputTokens)/1e6)*r.PriceIn + (float64(u.OutputTokens)/1e6)*r.PriceOut
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	_ = r.Store.RecordUsage(ctx, time.Now().Format("2006-01-02"), int64(u.InputTokens), int64(u.OutputTokens), cost)
+}
+
 func (r *Runner) savePartial(chatID int64, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
@@ -201,11 +224,44 @@ func (r *Runner) system() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.cachedPrompt == "" {
-		r.cachedPrompt = BuildPrompt(BuildParams{
+		params := BuildParams{
 			Cwd:   r.Cwd,
 			Model: r.Model,
 			Tools: r.Tools.Defs(),
-		})
+		}
+		if r.Memory != nil {
+			snap := r.Memory.Snapshot()
+			params.Memory = snap.Memory
+			params.UserProfile = snap.User
+		}
+		if r.Skills != nil {
+			params.SkillIndex = r.Skills.Index()
+		}
+		r.cachedPrompt = BuildPrompt(params)
 	}
 	return r.cachedPrompt
+}
+
+// RunSubagent fulfills tool.SubagentRunner. It creates an isolated child
+// session with its own history and budget, running under the same provider.
+func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
+	if r.SubagentCall != nil {
+		return r.SubagentCall(ctx, task)
+	}
+	child := &Runner{
+		Provider:  r.Provider,
+		Tools:     r.Tools,
+		Store:     r.Store,
+		Model:     r.Model,
+		Cwd:       r.Cwd,
+		MaxIters:  15,
+		MaxTokens: r.MaxTokens,
+		Memory:    r.Memory,
+		Skills:    r.Skills,
+		Approve:   r.Approve,
+		Out:       io.Discard,
+	}
+	// Synthetic high chat_id to keep subagent history separate from the main chat.
+	subID := time.Now().UnixNano()
+	return child.Run(ctx, subID, task)
 }

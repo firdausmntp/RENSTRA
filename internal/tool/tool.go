@@ -33,6 +33,10 @@ func NewRegistry(tools ...Tool) *Registry {
 	return r
 }
 
+func (r *Registry) Add(t Tool) {
+	r.tools[t.Name()] = t
+}
+
 func (r *Registry) Get(name string) (Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok

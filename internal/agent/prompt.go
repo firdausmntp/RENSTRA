@@ -13,6 +13,7 @@ type BuildParams struct {
 	Tools       []provider.ToolDef
 	Memory      string
 	UserProfile string
+	SkillIndex  string
 }
 
 // BuildPrompt assembles the system prompt. It is computed once per Runner so
@@ -41,6 +42,11 @@ func BuildPrompt(p BuildParams) string {
 		}
 	}
 
+	if p.SkillIndex != "" {
+		b.WriteString("\nSKILLS (panggil tool `skill` dengan action=load untuk memuat body):\n")
+		b.WriteString(p.SkillIndex)
+		b.WriteString("\n")
+	}
 	if p.Memory != "" {
 		b.WriteString("\nMEMORY (catatanmu):\n")
 		b.WriteString(p.Memory)
