@@ -1,0 +1,8 @@
+# build output
+/renstra
+/renstra.exe
+*.exe
+*.test
+
+# agent runtime state (never committed)
+.superpowers/
