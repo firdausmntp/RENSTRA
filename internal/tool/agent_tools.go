@@ -69,10 +69,10 @@ func NewSkill(r *skill.Registry) *Skill { return &Skill{reg: r} }
 
 func (t *Skill) Name() string { return "skill" }
 func (t *Skill) Description() string {
-	return "Memuat atau membuat skill (pengetahuan prosedural). action=list|load|create. Body skill dimuat saat load; index ringkas sudah ada di system prompt."
+	return "Memuat, membuat, atau memperbarui skill (pengetahuan prosedural dan alur kerja berulang). action=list|load|save|delete. Gunakan action=save (name, description, body) setiap kali user mengajarkan cara baru, meminta kamu mengingat alur kerja, atau ketika kamu baru saja menyelesaikan prosedur kompleks yang kemungkinan dipakai lagi di masa depan."
 }
 func (t *Skill) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","load","create"]},"name":{"type":"string"},"description":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list","load","save","create","update","delete"]},"name":{"type":"string"},"description":{"type":"string"},"body":{"type":"string"}},"required":["action"]}`)
 }
 func (t *Skill) Danger() bool { return false }
 
@@ -104,8 +104,39 @@ func (t *Skill) Execute(ctx context.Context, raw json.RawMessage) (string, error
 			return "", err
 		}
 		return fmt.Sprintf("skill %q dibuat", in.Name), nil
+	case "update":
+		if in.Name == "" {
+			return "", fmt.Errorf("name wajib untuk update")
+		}
+		if err := t.reg.Update(in.Name, in.Description, in.Body); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("skill %q diperbarui", in.Name), nil
+	case "save":
+		// Upsert: perbarui bila sudah ada, buat baru bila belum. Ini yang
+		// dipanggil agent ketika diminta mengingat cara baru.
+		if in.Name == "" {
+			return "", fmt.Errorf("name wajib untuk save")
+		}
+		if _, exists := t.reg.Get(in.Name); exists {
+			if err := t.reg.Update(in.Name, in.Description, in.Body); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("skill %q diperbarui", in.Name), nil
+		}
+		if err := t.reg.Create(in.Name, in.Description, in.Body); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("skill baru %q berhasil disimpan", in.Name), nil
+	case "delete":
+		if in.Name == "" {
+			return "", fmt.Errorf("name wajib untuk delete")
+		}
+		if err := t.reg.Delete(in.Name); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("skill %q dihapus", in.Name), nil
 	default:
 		return "", fmt.Errorf("action tidak dikenal: %q", in.Action)
 	}
 }
-

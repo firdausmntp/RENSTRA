@@ -56,3 +56,43 @@ func TestSkillToolLoadsBody(t *testing.T) {
 		t.Fatalf("got %q", out)
 	}
 }
+
+func TestSkillToolSaveUpserts(t *testing.T) {
+	reg, _ := skill.Load(skill.Layer{Dir: t.TempDir(), Writable: true})
+	st := tool.NewSkill(reg)
+
+	// Pertama: belum ada -> create
+	out, err := st.Execute(context.Background(), json.RawMessage(`{"action":"save","name":"deploy","description":"cara deploy","body":"step 1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "baru") {
+		t.Fatalf("got %q", out)
+	}
+
+	// Kedua: sudah ada -> update, tidak error duplikat
+	out, err = st.Execute(context.Background(), json.RawMessage(`{"action":"save","name":"deploy","description":"cara deploy v2","body":"step 1, step 2"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "diperbarui") {
+		t.Fatalf("got %q", out)
+	}
+
+	sk, _ := reg.Get("deploy")
+	if sk.Description != "cara deploy v2" || !strings.Contains(sk.Body, "step 2") {
+		t.Fatalf("skill tidak ter-update: %+v", sk)
+	}
+
+	// Delete
+	out, err = st.Execute(context.Background(), json.RawMessage(`{"action":"delete","name":"deploy"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "dihapus") {
+		t.Fatalf("got %q", out)
+	}
+	if _, ok := reg.Get("deploy"); ok {
+		t.Fatal("skill harus terhapus")
+	}
+}

@@ -212,3 +212,36 @@ func TestCreateReadOnly(t *testing.T) {
 		t.Fatalf("tidak boleh ada berkas tertulis")
 	}
 }
+
+func TestUpdateAndDelete(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := skill.Load(skill.Layer{Dir: dir, Writable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reg.Create("deploy", "cara deploy", "step 1: build\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Update body & deskripsi
+	if err := reg.Update("deploy", "cara deploy v2", "step 1: build\nstep 2: push\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	sk, _ := reg.Get("deploy")
+	if sk.Description != "cara deploy v2" || !strings.Contains(sk.Body, "push") {
+		t.Fatalf("update gagal: %+v", sk)
+	}
+
+	// Delete
+	if err := reg.Delete("deploy"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reg.Get("deploy"); ok {
+		t.Fatal("skill harus terhapus dari registry")
+	}
+	if _, err := os.Stat(sk.Path); !os.IsNotExist(err) {
+		t.Fatal("file skill harus hilang dari disk")
+	}
+}

@@ -151,6 +151,71 @@ func (r *Registry) Create(name, description, body string) error {
 	return nil
 }
 
+// Update menimpa skill yang sudah ada, di lapis tempat skill itu berada, asal
+// lapis tersebut writable. Description kosong mempertahankan deskripsi lama.
+func (r *Registry) Update(name, description, body string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %q tidak ditemukan", name)
+	}
+	if !r.layerWritable(existing.Dir) {
+		return fmt.Errorf("skill %q berada di lapis read-only (%s)", name, existing.Dir)
+	}
+	if strings.TrimSpace(description) == "" {
+		description = existing.Description
+	}
+
+	content := frontmatter(name, description) + body
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	if err := os.WriteFile(existing.Path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("menulis skill: %w", err)
+	}
+
+	existing.Description = description
+	existing.Body = body
+	r.skills[name] = existing
+	return nil
+}
+
+// Delete menghapus skill dari lapisnya, asal lapis tersebut writable.
+func (r *Registry) Delete(name string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.skills[name]
+	if !ok {
+		return fmt.Errorf("skill %q tidak ditemukan", name)
+	}
+	if !r.layerWritable(existing.Dir) {
+		return fmt.Errorf("skill %q berada di lapis read-only (%s)", name, existing.Dir)
+	}
+
+	if err := os.Remove(existing.Path); err != nil {
+		return fmt.Errorf("menghapus skill: %w", err)
+	}
+	// Bentuk <dir>/<name>/SKILL.md: buang direktori kosongnya.
+	if filepath.Base(existing.Path) == "SKILL.md" {
+		_ = os.Remove(filepath.Dir(existing.Path))
+	}
+	delete(r.skills, name)
+	return nil
+}
+
+// layerWritable reports whether dir is a writable layer.
+func (r *Registry) layerWritable(dir string) bool {
+	for _, layer := range r.layers {
+		if layer.Dir == dir {
+			return layer.Writable
+		}
+	}
+	return false
+}
+
 // scan mengumpulkan skill dalam satu lapis. Berkas rusak dilewati agar satu
 // skill cacat tidak menggagalkan seluruh registry.
 func scan(dir string) ([]Skill, error) {

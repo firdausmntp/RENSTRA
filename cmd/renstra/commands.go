@@ -186,23 +186,11 @@ func skillCmd(args []string) error {
 			return fmt.Errorf("pemakaian: renstra skill rm <name> [--global]")
 		}
 		name := filtered[1]
-		targetDir := instanceDir
-		if global {
-			targetDir = globalDir
+		if err := reg.Delete(name); err != nil {
+			return err
 		}
-		// Try <targetDir>/<name>/SKILL.md or <targetDir>/<name>.md
-		p1 := filepath.Join(targetDir, name, "SKILL.md")
-		p2 := filepath.Join(targetDir, name+".md")
-		if err := os.Remove(p1); err == nil {
-			_ = os.Remove(filepath.Join(targetDir, name))
-			fmt.Printf("skill %q dihapus dari %s\n", name, targetDir)
-			return nil
-		}
-		if err := os.Remove(p2); err == nil {
-			fmt.Printf("skill %q dihapus dari %s\n", name, targetDir)
-			return nil
-		}
-		return fmt.Errorf("skill %q tidak ditemukan di %s", name, targetDir)
+		fmt.Printf("skill %q berhasil dihapus\n", name)
+		return nil
 	default:
 		return fmt.Errorf("subcommand skill tidak dikenal: %s", filtered[0])
 	}
