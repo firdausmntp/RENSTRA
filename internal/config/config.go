@@ -110,7 +110,12 @@ func Load() (*Config, error) {
 			p.Timeout = Duration(120 * time.Second)
 		}
 		if p.Path == "" {
-			p.Path = "/chat/completions"
+			// Only the OpenAI-compatible shape has a fixed default; other
+			// kinds leave Path empty so their adapter picks its own.
+			switch p.Kind {
+			case "", "openai", "custom":
+				p.Path = "/chat/completions"
+			}
 		}
 		cfg.Providers[name] = p
 	}
