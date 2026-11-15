@@ -263,6 +263,8 @@ func setupCmd() error {
 	apiKeyEnv := promptString(reader, "Nama env variable untuk API key", strings.ToUpper(providerKind)+"_API_KEY")
 	defaultModel := promptString(reader, "Model default", "gpt-4o-mini")
 	allowedUserStr := promptString(reader, "Telegram User ID kamu (angka, pisahkan koma)", "")
+	approvalMode := promptString(reader, "Mode approval (prompt / auto / deny)", "prompt")
+	promptPrefix := promptString(reader, "System prompt prefix (kosong = default)", "")
 
 	if baseURL == "" {
 		if providerKind == "anthropic" {
@@ -280,37 +282,91 @@ func setupCmd() error {
 		}
 	}
 
-	cfg := config.Config{
-		DefaultModel: "utama:" + defaultModel,
-		Providers: map[string]config.ProviderConfig{
-			"utama": {
-				Kind:         providerKind,
-				BaseURL:      baseURL,
-				APIKeyEnv:    apiKeyEnv,
-				DefaultModel: defaultModel,
-			},
-		},
-		Limits: config.Limits{WarnDailyUSD: 1.0},
-		Agent:  config.Agent{MaxIterations: 40},
-	}
-
 	_ = os.MkdirAll(home, 0o700)
-	raw, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
 
-	// Append telegram section as raw text to keep config.yaml human readable
-	var tgLines strings.Builder
-	tgLines.WriteString("\ntelegram:\n")
-	fmt.Fprintf(&tgLines, "  token: %q\n", token)
-	tgLines.WriteString("  allowed_users:\n")
-	for _, id := range allowedUsers {
-		fmt.Fprintf(&tgLines, "    - %d\n", id)
-	}
+	var b strings.Builder
+	b.WriteString("# RENSTRA configuration\n")
+	b.WriteString("# Edit file ini untuk menyesuaikan perilaku agent.\n\n")
 
-	final := append(raw, []byte(tgLines.String())...)
-	if err := os.WriteFile(cfgPath, final, 0o600); err != nil {
+	b.WriteString("default_model: " + yamlQuote("utama:"+defaultModel) + "\n\n")
+
+	b.WriteString("providers:\n")
+	b.WriteString("  utama:\n")
+	fmt.Fprintf(&b, "    kind: %s\n", yamlQuote(providerKind))
+	fmt.Fprintf(&b, "    base_url: %s\n", yamlQuote(baseURL))
+	fmt.Fprintf(&b, "    api_key_env: %s\n", yamlQuote(apiKeyEnv))
+	fmt.Fprintf(&b, "    default_model: %s\n", yamlQuote(defaultModel))
+	b.WriteString("    # path: /chat/completions     # override endpoint bila perlu\n")
+	b.WriteString("    # proxy: \"http://127.0.0.1:8080\"\n")
+	b.WriteString("    # headers:\n")
+	b.WriteString("    #   X-Custom-Header: value\n")
+	b.WriteString("    # models:\n")
+	b.WriteString("    #   " + defaultModel + ":\n")
+	b.WriteString("    #     context: 128000\n")
+	b.WriteString("    #     max_output: 4096\n")
+	b.WriteString("    #     price_in: 0.15\n")
+	b.WriteString("    #     price_out: 0.60\n\n")
+
+	b.WriteString("aliases: {}\n\n")
+
+	b.WriteString("# --- Approval ---\n")
+	b.WriteString("# mode: prompt = tanya lewat inline keyboard, auto = izinkan semua,\n")
+	b.WriteString("#       deny = tolak semua tool berbahaya\n")
+	b.WriteString("approval:\n")
+	fmt.Fprintf(&b, "  mode: %s\n", yamlQuote(approvalMode))
+	b.WriteString("  timeout: 120s\n")
+	b.WriteString("  # always_allowed:            # bypass prompt untuk perintah spesifik\n")
+	b.WriteString("  #   - \"terminal:git status\"\n")
+	b.WriteString("  #   - \"write_file\"\n")
+	b.WriteString("  # always_denied:             # blokir perintah spesifik\n")
+	b.WriteString("  #   - \"terminal:rm -rf\"\n\n")
+
+	b.WriteString("# --- Telegram ---\n")
+	b.WriteString("telegram:\n")
+	fmt.Fprintf(&b, "  token: %s\n", yamlQuote(token))
+	b.WriteString("  allowed_users:\n")
+	if len(allowedUsers) == 0 {
+		b.WriteString("    []   # WARNING: kosong = tolak semua orang\n")
+	} else {
+		for _, id := range allowedUsers {
+			fmt.Fprintf(&b, "    - %d\n", id)
+		}
+	}
+	b.WriteString("  poll_timeout: 30s\n\n")
+
+	b.WriteString("# --- Agent ---\n")
+	b.WriteString("agent:\n")
+	if promptPrefix != "" {
+		fmt.Fprintf(&b, "  system_prompt_prefix: %s\n", yamlQuote(promptPrefix))
+	} else {
+		b.WriteString("  # system_prompt_prefix: \"kamu asisten pribadi yang ringkas dan langsung\"\n")
+	}
+	b.WriteString("  max_iterations: 40\n")
+	b.WriteString("  max_turn_timeout: 15m\n")
+	b.WriteString("  # aux_model: \"utama:gpt-4o-mini\"   # model untuk kompaksi (default = model utama)\n")
+	b.WriteString("  auto_compact: true\n")
+	b.WriteString("  compact_threshold: 0.7\n\n")
+
+	b.WriteString("# --- Tools ---\n")
+	b.WriteString("# Set false untuk mematikan tool tertentu.\n")
+	b.WriteString("tools:\n")
+	b.WriteString("  terminal: true\n")
+	b.WriteString("  read_file: true\n")
+	b.WriteString("  write_file: true\n")
+	b.WriteString("  patch: true\n")
+	b.WriteString("  web_fetch: true\n")
+	b.WriteString("  memory: true\n")
+	b.WriteString("  skill: true\n")
+	b.WriteString("  cron: true\n")
+	b.WriteString("  delegate: true\n\n")
+
+	b.WriteString("# --- Limits (0 = nonaktif, hanya peringatan) ---\n")
+	b.WriteString("limits:\n")
+	b.WriteString("  warn_daily_usd: 1.0\n")
+	b.WriteString("  max_daily_usd: 0\n")
+	b.WriteString("  max_daily_tokens: 0\n")
+
+	if err := os.WriteFile(cfgPath, []byte(b.String()), 0o600); err != nil {
 		return err
 	}
 
@@ -318,6 +374,16 @@ func setupCmd() error {
 	fmt.Printf("Jangan lupa set env: %s\n", apiKeyEnv)
 	fmt.Println("Jalankan `renstra serve` untuk menyalakan bot Telegram.")
 	return nil
+}
+
+// yamlQuote renders a string as a YAML double-quoted scalar so a token that
+// contains ':' or '#' cannot break the file.
+func yamlQuote(s string) string {
+	raw, err := yaml.Marshal(s)
+	if err != nil {
+		return `""`
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func promptString(r *bufio.Reader, prompt, def string) string {
@@ -344,20 +410,11 @@ func serveCmd() error {
 	home := config.Home()
 	cfgPath := filepath.Join(home, "config.yaml")
 
-	// Read Telegram token and allowed_users from config.yaml directly
-	raw, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return fmt.Errorf("config.yaml belum ada; jalankan `renstra setup` dulu: %w", err)
-	}
-	var tgCfg struct {
-		Telegram struct {
-			Token        string  `yaml:"token"`
-			AllowedUsers []int64 `yaml:"allowed_users"`
-		} `yaml:"telegram"`
-	}
-	_ = yaml.Unmarshal(raw, &tgCfg)
+	// Read Telegram token and allowed_users from config
+	token := cfg.Telegram.Token
+	allowedUsers := cfg.Telegram.AllowedUsers
 
-	if tgCfg.Telegram.Token == "" {
+	if token == "" {
 		return fmt.Errorf("telegram.token belum diset di %s; jalankan `renstra setup`", cfgPath)
 	}
 
@@ -370,12 +427,18 @@ func serveCmd() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	pollTimeout := time.Duration(cfg.Telegram.PollTimeout)
+	if pollTimeout == 0 {
+		pollTimeout = 30 * time.Second
+	}
+
 	// Seed bot with recently seen updates so a restart never answers twice.
 	_ = st.PruneUpdatesSeen(ctx)
 	recentIDs, _ := st.RecentUpdateIDs(ctx, 500)
 	bot, err := telegram.New(telegram.Config{
-		Token:        tgCfg.Telegram.Token,
-		AllowedUsers: tgCfg.Telegram.AllowedUsers,
+		Token:        token,
+		AllowedUsers: allowedUsers,
+		PollTimeout:  pollTimeout,
 		OnSeen: func(id int64) {
 			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer scancel()
@@ -432,11 +495,15 @@ func serveCmd() error {
 		PriceIn:       mc.PriceIn,
 		PriceOut:      mc.PriceOut,
 		ContextWindow: mc.Context,
+		AutoCompact:   cfg.Agent.AutoCompaction(),
+		Threshold:     cfg.Agent.Threshold(),
+		PromptPrefix:  cfg.Agent.SystemPromptPrefix,
+		ApprovalCfg:   cfg.Approval,
 		Memory:        memStore,
 		Skills:        skillReg,
 	}
 
-	for _, t := range []tool.Tool{
+	candidates := []tool.Tool{
 		tool.NewTerminal(workspace, 0),
 		tool.NewReadFile(workspace),
 		tool.NewWriteFile(workspace),
@@ -446,8 +513,11 @@ func serveCmd() error {
 		tool.NewSkill(skillReg),
 		tool.NewCron(st, 0),
 		tool.NewDelegate(runner, 0),
-	} {
-		runner.Tools.Add(t)
+	}
+	for _, t := range candidates {
+		if cfg.Tools.IsEnabled(t.Name()) {
+			runner.Tools.Add(t)
+		}
 	}
 
 	// Connect MCP servers
@@ -462,10 +532,16 @@ func serveCmd() error {
 		fmt.Fprintf(os.Stderr, "peringatan MCP: %v\n", merr)
 	}
 
+	approvalWait := time.Duration(cfg.Approval.Timeout)
+	if approvalWait == 0 {
+		approvalWait = 120 * time.Second
+	}
+
 	handler := &telegramHandler{
-		bot:    bot,
-		runner: runner,
-		store:  st,
+		bot:             bot,
+		runner:          runner,
+		store:           st,
+		approvalTimeout: approvalWait,
 	}
 
 	// Cron runner in background with panic recovery
@@ -495,9 +571,10 @@ func serveCmd() error {
 }
 
 type telegramHandler struct {
-	bot    *telegram.Bot
-	runner *agent.Runner
-	store  *store.Store
+	bot             *telegram.Bot
+	runner          *agent.Runner
+	store           *store.Store
+	approvalTimeout time.Duration
 }
 
 func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string) (reply string, err error) {
@@ -512,7 +589,11 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 }
 
 func (h *telegramHandler) Approve(ctx context.Context, chatID int64, toolName, args string) (bool, error) {
-	return h.bot.AskApproval(ctx, chatID, toolName, args, 120*time.Second)
+	timeout := h.approvalTimeout
+	if timeout <= 0 {
+		timeout = 120 * time.Second
+	}
+	return h.bot.AskApproval(ctx, chatID, toolName, args, timeout)
 }
 
 func buildProvider(pcfg config.ProviderConfig) (provider.Provider, error) {

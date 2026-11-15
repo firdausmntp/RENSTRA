@@ -15,6 +15,8 @@ import (
 	"renstra/internal/skill"
 	"renstra/internal/store"
 	"renstra/internal/tool"
+
+	"renstra/internal/config"
 )
 
 const (
@@ -39,6 +41,10 @@ type Runner struct {
 	PriceOut      float64 // USD per 1M tokens
 	ContextWindow int     // Model context tokens; defaults to 32000
 	AuxModel      string  // Model used to summarize during compaction; defaults to Model
+	AutoCompact   bool    // Whether to auto-compact when nearing context window
+	Threshold     float64 // Compaction trigger threshold; defaults to 0.7
+	PromptPrefix  string  // Custom system prompt prefix
+	ApprovalCfg   config.ApprovalConfig
 	SubagentCall  func(ctx context.Context, task string) (string, error)
 
 	mu           sync.Mutex
@@ -90,7 +96,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 		if win <= 0 {
 			win = 32000
 		}
-		if ShouldCompact(history, win, compactThreshold) {
+		if ShouldCompact(history, win, r.threshold()) {
 			summary := r.summarize(ctx, history)
 			if compacted, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err == nil && len(compacted) > 0 {
 				history = compacted
@@ -182,6 +188,13 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 	return "", fmt.Errorf("batas iterasi (%d) tercapai tanpa jawaban akhir", maxIters)
 }
 
+func (r *Runner) threshold() float64 {
+	if r.Threshold <= 0 {
+		return compactThreshold
+	}
+	return r.Threshold
+}
+
 func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res string) {
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -197,15 +210,24 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 		return "argumen tool tidak valid: bukan JSON"
 	}
 	if t.Danger() {
-		if r.Approve == nil {
-			return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
-		}
-		allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
-		if err != nil {
-			return "approval gagal: " + err.Error()
-		}
-		if !allowed {
-			return "ditolak user"
+		// 1. Check declarative approval rules from config first.
+		if decided, allowed := r.ApprovalCfg.Check(call.Name, []byte(call.Arguments)); decided {
+			if !allowed {
+				return "ditolak: aturan approval konfigurasi menolak perintah ini"
+			}
+			// Pre-approved by config rule (e.g. mode: "auto" or always_allowed)
+		} else {
+			// 2. Fall back to interactive prompt (Telegram inline keyboard / CLI y/n)
+			if r.Approve == nil {
+				return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
+			}
+			allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
+			if err != nil {
+				return "approval gagal: " + err.Error()
+			}
+			if !allowed {
+				return "ditolak user"
+			}
 		}
 	}
 
@@ -269,9 +291,10 @@ func (r *Runner) system() string {
 	defer r.mu.Unlock()
 	if r.cachedPrompt == "" {
 		params := BuildParams{
-			Cwd:   r.Cwd,
-			Model: r.Model,
-			Tools: r.Tools.Defs(),
+			Cwd:          r.Cwd,
+			Model:        r.Model,
+			Tools:        r.Tools.Defs(),
+			PromptPrefix: r.PromptPrefix,
 		}
 		if r.Memory != nil {
 			snap := r.Memory.Snapshot()

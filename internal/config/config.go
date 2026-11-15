@@ -33,10 +33,38 @@ type Limits struct {
 	MaxDailyTokens int64   `yaml:"max_daily_tokens"`
 }
 
+type ApprovalConfig struct {
+	Mode          string   `yaml:"mode"`           // "prompt" (default), "auto" (allow all), "deny" (deny all)
+	Timeout       Duration `yaml:"timeout"`        // default 120s
+	AlwaysAllowed []string `yaml:"always_allowed"` // tool names or "tool:prefix"
+	AlwaysDenied  []string `yaml:"always_denied"`  // tool names or "tool:prefix"
+}
+
+type TelegramConfig struct {
+	Token        string   `yaml:"token"`
+	AllowedUsers []int64  `yaml:"allowed_users"`
+	PollTimeout  Duration `yaml:"poll_timeout"` // default 30s
+}
+
+type ToolsConfig struct {
+	Terminal  *bool `yaml:"terminal"`
+	ReadFile  *bool `yaml:"read_file"`
+	WriteFile *bool `yaml:"write_file"`
+	Patch     *bool `yaml:"patch"`
+	WebFetch  *bool `yaml:"web_fetch"`
+	Memory    *bool `yaml:"memory"`
+	Skill     *bool `yaml:"skill"`
+	Cron      *bool `yaml:"cron"`
+	Delegate  *bool `yaml:"delegate"`
+}
+
 type Agent struct {
-	MaxIterations  int      `yaml:"max_iterations"`
-	MaxTurnTimeout Duration `yaml:"max_turn_timeout"`
-	AuxModel       string   `yaml:"aux_model"`
+	SystemPromptPrefix string   `yaml:"system_prompt_prefix"`
+	MaxIterations      int      `yaml:"max_iterations"`
+	MaxTurnTimeout     Duration `yaml:"max_turn_timeout"`
+	AuxModel           string   `yaml:"aux_model"`
+	AutoCompact        *bool    `yaml:"auto_compact"`
+	CompactThreshold   float64  `yaml:"compact_threshold"`
 }
 
 type ModelConfig struct {
@@ -67,6 +95,9 @@ type Config struct {
 	Aliases      map[string]string         `yaml:"aliases"`
 	Limits       Limits                    `yaml:"limits"`
 	Agent        Agent                     `yaml:"agent"`
+	Approval     ApprovalConfig            `yaml:"approval"`
+	Telegram     TelegramConfig            `yaml:"telegram"`
+	Tools        ToolsConfig               `yaml:"tools"`
 }
 
 func Home() string {
@@ -81,15 +112,122 @@ func Home() string {
 }
 
 func defaults() *Config {
+	autoCompact := true
 	return &Config{
 		Providers: map[string]ProviderConfig{},
 		Aliases:   map[string]string{},
 		Limits:    Limits{WarnDailyUSD: 1.0},
 		Agent: Agent{
-			MaxIterations:  40,
-			MaxTurnTimeout: Duration(15 * time.Minute),
+			MaxIterations:    40,
+			MaxTurnTimeout:   Duration(15 * time.Minute),
+			AutoCompact:      &autoCompact,
+			CompactThreshold: 0.7,
+		},
+		Approval: ApprovalConfig{
+			Mode:    "prompt",
+			Timeout: Duration(120 * time.Second),
+		},
+		Telegram: TelegramConfig{
+			PollTimeout: Duration(30 * time.Second),
 		},
 	}
+}
+
+// IsEnabled reports whether a tool is switched on. Absent means enabled.
+func (t ToolsConfig) IsEnabled(name string) bool {
+	var v *bool
+	switch name {
+	case "terminal":
+		v = t.Terminal
+	case "read_file":
+		v = t.ReadFile
+	case "write_file":
+		v = t.WriteFile
+	case "patch":
+		v = t.Patch
+	case "web_fetch":
+		v = t.WebFetch
+	case "memory":
+		v = t.Memory
+	case "skill":
+		v = t.Skill
+	case "cron":
+		v = t.Cron
+	case "delegate":
+		v = t.Delegate
+	}
+	if v == nil {
+		return true
+	}
+	return *v
+}
+
+// Check evaluates whether a dangerous tool execution is pre-approved,
+// pre-denied, or needs to prompt the user. Returns (decided, allowed).
+func (a ApprovalConfig) Check(toolName string, rawArgs []byte) (decided bool, allowed bool) {
+	mode := strings.ToLower(strings.TrimSpace(a.Mode))
+	if mode == "auto" || mode == "allow_all" || mode == "yes" {
+		return true, true
+	}
+	if mode == "deny" || mode == "deny_all" || mode == "no" {
+		return true, false
+	}
+
+	argStr := string(rawArgs)
+
+	// Check always_denied rules first
+	for _, rule := range a.AlwaysDenied {
+		if matchRule(rule, toolName, argStr) {
+			return true, false
+		}
+	}
+
+	// Check always_allowed rules next
+	for _, rule := range a.AlwaysAllowed {
+		if matchRule(rule, toolName, argStr) {
+			return true, true
+		}
+	}
+
+	// Otherwise, let the approver prompt
+	return false, false
+}
+
+func matchRule(rule, toolName, argStr string) bool {
+	rule = strings.TrimSpace(rule)
+	if rule == "" {
+		return false
+	}
+	if rule == toolName || rule == "*" {
+		return true
+	}
+	prefix := toolName + ":"
+	if strings.HasPrefix(rule, prefix) {
+		sub := strings.TrimPrefix(rule, prefix)
+		return strings.Contains(argStr, sub)
+	}
+	return false
+}
+func (a Agent) AutoCompaction() bool {
+	if a.AutoCompact == nil {
+		return true
+	}
+	return *a.AutoCompact
+}
+
+// Threshold returns the compaction trigger ratio, clamped to a sane range.
+func (a Agent) Threshold() float64 {
+	t := a.CompactThreshold
+	if t <= 0 {
+		t = 0.7
+	}
+	if t < 0.3 {
+		t = 0.3
+	}
+	if t > 0.95 {
+		t = 0.95
+	}
+	return t
 }
 
 func Load() (*Config, error) {

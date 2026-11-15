@@ -162,15 +162,23 @@ func chatCmd(args []string) error {
 		PriceIn:       mc.PriceIn,
 		PriceOut:      mc.PriceOut,
 		ContextWindow: mc.Context,
+		AutoCompact:   cfg.Agent.AutoCompaction(),
+		Threshold:     cfg.Agent.Threshold(),
+		PromptPrefix:  cfg.Agent.SystemPromptPrefix,
+		ApprovalCfg:   cfg.Approval,
 		Memory:        memStore,
 		Skills:        skillReg,
 		Approve:       cli.Approver(os.Stdin, os.Stdout),
 		Out:           os.Stdout,
 	}
 	for _, t := range tools {
-		r.Tools.Add(t)
+		if cfg.Tools.IsEnabled(t.Name()) {
+			r.Tools.Add(t)
+		}
 	}
-	r.Tools.Add(tool.NewDelegate(r, 0))
+	if cfg.Tools.IsEnabled("delegate") {
+		r.Tools.Add(tool.NewDelegate(r, 0))
+	}
 	fmt.Printf("renstra — %s (%s). /help untuk bantuan.\n\n", model, filepath.Base(pcfg.BaseURL))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
