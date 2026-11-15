@@ -29,6 +29,9 @@ type Config struct {
 	AllowedUsers []int64
 	PollTimeout  time.Duration
 	APIBase      string
+	// OnSeen is called for every update id before it is dispatched, so the
+	// caller can persist it and keep dedup working across restarts.
+	OnSeen func(updateID int64)
 }
 
 type Handler interface {
@@ -41,13 +44,30 @@ type Bot struct {
 	apiBase     string
 	pollTimeout time.Duration
 	allowed     map[int64]struct{}
+	onSeen      func(int64)
 	http        *http.Client
 
 	mu          sync.Mutex
 	seen        map[int64]struct{}
-	cancels     map[int64]context.CancelFunc
+	cancels     map[int64]turnHandle
+	locks       map[int64]*chatLock
 	pending     map[int64]*pendingApproval
 	approvalSeq int64
+	turnSeq     int64
+}
+
+// turnHandle identifies one running turn, so a finishing turn cannot clear a
+// successor's cancel func.
+type turnHandle struct {
+	cancel context.CancelFunc
+	gen    int64
+}
+
+// chatLock serializes turns per chat: a new message interrupts the running
+// turn and then runs after it, never concurrently.
+type chatLock struct {
+	mu   sync.Mutex
+	refs int
 }
 
 type pendingApproval struct {
@@ -76,10 +96,12 @@ func New(cfg Config) (*Bot, error) {
 		apiBase:     base,
 		pollTimeout: poll,
 		allowed:     allowed,
+		onSeen:      cfg.OnSeen,
 		// The client must outlive one long poll.
 		http:    &http.Client{Timeout: poll + 30*time.Second},
 		seen:    map[int64]struct{}{},
-		cancels: map[int64]context.CancelFunc{},
+		cancels: map[int64]turnHandle{},
+		locks:   map[int64]*chatLock{},
 		pending: map[int64]*pendingApproval{},
 	}, nil
 }
@@ -93,15 +115,20 @@ func (b *Bot) MarkSeen(id int64) {
 }
 
 // RegisterCancel stores the cancel func for the active turn of a chat.
-func (b *Bot) RegisterCancel(chatID int64, cancel context.CancelFunc) {
+func (b *Bot) RegisterCancel(chatID int64, cancel context.CancelFunc) int64 {
 	b.mu.Lock()
-	b.cancels[chatID] = cancel
+	b.turnSeq++
+	gen := b.turnSeq
+	b.cancels[chatID] = turnHandle{cancel: cancel, gen: gen}
 	b.mu.Unlock()
+	return gen
 }
 
-func (b *Bot) clearCancel(chatID int64) {
+func (b *Bot) clearCancel(chatID int64, gen int64) {
 	b.mu.Lock()
-	delete(b.cancels, chatID)
+	if cur, ok := b.cancels[chatID]; ok && cur.gen == gen {
+		delete(b.cancels, chatID)
+	}
 	b.mu.Unlock()
 }
 
@@ -159,7 +186,12 @@ func (b *Bot) handleUpdate(ctx context.Context, h Handler, u update) {
 		return
 	}
 	b.seen[u.UpdateID] = struct{}{}
+	onSeen := b.onSeen
 	b.mu.Unlock()
+
+	if onSeen != nil {
+		onSeen(u.UpdateID)
+	}
 
 	if u.CallbackQuery != nil {
 		b.handleCallback(ctx, *u.CallbackQuery)
@@ -167,6 +199,32 @@ func (b *Bot) handleUpdate(ctx context.Context, h Handler, u update) {
 	}
 	if u.Message != nil {
 		b.handleMessage(ctx, h, *u.Message)
+	}
+}
+
+func (b *Bot) lockChat(chatID int64) func() {
+	b.mu.Lock()
+	l := b.locks[chatID]
+	if l == nil {
+		l = &chatLock{}
+		b.locks[chatID] = l
+	}
+	l.refs++
+	// Interrupt running turn if any
+	if h, ok := b.cancels[chatID]; ok && h.cancel != nil {
+		h.cancel()
+	}
+	b.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		b.mu.Lock()
+		l.refs--
+		if l.refs <= 0 {
+			delete(b.locks, chatID)
+		}
+		b.mu.Unlock()
 	}
 }
 
@@ -187,14 +245,14 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		return
 	case "/stop":
 		b.mu.Lock()
-		cancel := b.cancels[m.Chat.ID]
+		h, ok := b.cancels[m.Chat.ID]
 		delete(b.cancels, m.Chat.ID)
 		b.mu.Unlock()
-		if cancel == nil {
+		if !ok || h.cancel == nil {
 			b.reply(ctx, m.Chat.ID, "tidak ada yang berjalan")
 			return
 		}
-		cancel()
+		h.cancel()
 		b.reply(ctx, m.Chat.ID, "dihentikan")
 		return
 	}
@@ -202,10 +260,19 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 	if h == nil {
 		return
 	}
-	out, err := h.Handle(ctx, m.Chat.ID, m.Text)
-	defer b.clearCancel(m.Chat.ID)
+	unlock := b.lockChat(m.Chat.ID)
+	defer unlock()
+
+	turnCtx, turnCancel := context.WithCancel(ctx)
+	gen := b.RegisterCancel(m.Chat.ID, turnCancel)
+	defer func() {
+		turnCancel()
+		b.clearCancel(m.Chat.ID, gen)
+	}()
+
+	out, err := h.Handle(turnCtx, m.Chat.ID, m.Text)
 	if err != nil {
-		if ctx.Err() != nil {
+		if turnCtx.Err() != nil {
 			return
 		}
 		b.reply(ctx, m.Chat.ID, "error: "+err.Error())

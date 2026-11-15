@@ -24,20 +24,21 @@ const (
 )
 
 type Runner struct {
-	Provider     provider.Provider
-	Tools        *tool.Registry
-	Store        *store.Store
-	Model        string
-	Cwd          string
-	MaxIters     int
-	MaxTokens    int
-	Memory       *memory.Store
-	Skills       *skill.Registry
-	Approve      func(ctx context.Context, name string, args json.RawMessage) (bool, error)
-	Out          io.Writer
-	PriceIn      float64 // USD per 1M tokens
-	PriceOut     float64 // USD per 1M tokens
-	SubagentCall func(ctx context.Context, task string) (string, error)
+	Provider      provider.Provider
+	Tools         *tool.Registry
+	Store         *store.Store
+	Model         string
+	Cwd           string
+	MaxIters      int
+	MaxTokens     int
+	Memory        *memory.Store
+	Skills        *skill.Registry
+	Approve       func(ctx context.Context, name string, args json.RawMessage) (bool, error)
+	Out           io.Writer
+	PriceIn       float64 // USD per 1M tokens
+	PriceOut      float64 // USD per 1M tokens
+	ContextWindow int     // Model context tokens; defaults to 32000
+	SubagentCall  func(ctx context.Context, task string) (string, error)
 
 	mu           sync.Mutex
 	cachedPrompt string
@@ -61,6 +62,14 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 	}
 
 	for i := 0; i < maxIters; i++ {
+		win := r.ContextWindow
+		if win <= 0 {
+			win = 32000
+		}
+		if ShouldCompact(history, win, 0.7) {
+			history = CompactHistory(history, 6, "Percakapan sebelumnya telah diringkas untuk menghemat ruang konteks.")
+		}
+
 		req := provider.Request{
 			Model:     r.Model,
 			Messages:  append([]provider.Message{{Role: provider.RoleSystem, Content: r.system()}}, history...),
@@ -132,7 +141,8 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 				r.fillCancelledTools(chatID, calls[idx:])
 				return text.String(), ctx.Err()
 			}
-			result := r.executeTool(ctx, call)
+			toolCtx := tool.WithChatID(ctx, chatID)
+			result := r.executeTool(toolCtx, call)
 			msg := provider.Message{Role: provider.RoleTool, Content: result, ToolCallID: call.ID}
 			if _, err := r.appendWithFallback(ctx, chatID, msg); err != nil {
 				return "", err

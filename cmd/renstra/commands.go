@@ -15,6 +15,7 @@ import (
 	"renstra/internal/agent"
 	"renstra/internal/config"
 	"renstra/internal/cron"
+	"renstra/internal/mcp"
 	"renstra/internal/memory"
 	"renstra/internal/provider"
 	"renstra/internal/provider/anthropic"
@@ -30,6 +31,64 @@ import (
 	"renstra/internal/telegram"
 	"renstra/internal/tool"
 )
+
+func mcpCmd(args []string) error {
+	cfgs := loadMCPConfigs()
+	if len(cfgs) == 0 {
+		fmt.Println("(belum ada server MCP terdaftar di mcp.yaml)")
+		return nil
+	}
+	fmt.Printf("Server MCP terkonfigurasi (%d):\n", len(cfgs))
+	for _, c := range cfgs {
+		fmt.Printf("  %-15s cmd=%s args=%v\n", c.Name, c.Command, c.Args)
+	}
+	return nil
+}
+
+func loadMCPConfigs() []mcp.ServerConfig {
+	home := config.Home()
+	paths := []string{
+		filepath.Join(home, "mcp.yaml"),
+		filepath.Join(globalBaseDir(), "mcp.yaml"),
+	}
+
+	seen := make(map[string]bool)
+	var out []mcp.ServerConfig
+
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Servers map[string]struct {
+				Command string            `yaml:"command"`
+				Args    []string          `yaml:"args"`
+				Env     []string          `yaml:"env"`
+				URL     string            `yaml:"url"`
+				Headers map[string]string `yaml:"headers"`
+			} `yaml:"servers"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			continue
+		}
+		for name, s := range doc.Servers {
+			if seen[name] {
+				continue // profile layer wins over global
+			}
+			seen[name] = true
+			out = append(out, mcp.ServerConfig{
+				Name:    name,
+				Command: s.Command,
+				Args:    s.Args,
+				Env:     s.Env,
+				URL:     s.URL,
+				Headers: s.Headers,
+			})
+		}
+	}
+	return out
+}
 
 func modelListCmd() {
 	cfg, err := config.Load()
@@ -310,10 +369,16 @@ func serveCmd() error {
 	defer cancel()
 
 	// Seed bot with recently seen updates so a restart never answers twice.
+	_ = st.PruneUpdatesSeen(ctx)
 	recentIDs, _ := st.RecentUpdateIDs(ctx, 500)
 	bot, err := telegram.New(telegram.Config{
 		Token:        tgCfg.Telegram.Token,
 		AllowedUsers: tgCfg.Telegram.AllowedUsers,
+		OnSeen: func(id int64) {
+			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer scancel()
+			_ = st.MarkUpdateSeen(sctx, id)
+		},
 	})
 	if err != nil {
 		return err
@@ -349,17 +414,18 @@ func serveCmd() error {
 
 	mc := pcfg.ModelConfig(model)
 	runner := &agent.Runner{
-		Provider:  prov,
-		Tools:     tool.NewRegistry(),
-		Store:     st,
-		Model:     model,
-		Cwd:       workspace,
-		MaxIters:  cfg.Agent.MaxIterations,
-		MaxTokens: mc.MaxOutput,
-		PriceIn:   mc.PriceIn,
-		PriceOut:  mc.PriceOut,
-		Memory:    memStore,
-		Skills:    skillReg,
+		Provider:      prov,
+		Tools:         tool.NewRegistry(),
+		Store:         st,
+		Model:         model,
+		Cwd:           workspace,
+		MaxIters:      cfg.Agent.MaxIterations,
+		MaxTokens:     mc.MaxOutput,
+		PriceIn:       mc.PriceIn,
+		PriceOut:      mc.PriceOut,
+		ContextWindow: mc.Context,
+		Memory:        memStore,
+		Skills:        skillReg,
 	}
 
 	for _, t := range []tool.Tool{
@@ -370,9 +436,21 @@ func serveCmd() error {
 		tool.NewWebFetch(),
 		tool.NewMemory(memStore),
 		tool.NewSkill(skillReg),
+		tool.NewCron(st, 0),
 		tool.NewDelegate(runner, 0),
 	} {
 		runner.Tools.Add(t)
+	}
+
+	// Connect MCP servers
+	mcpServers, mcpErrors := mcp.ConnectAll(ctx, loadMCPConfigs())
+	for _, s := range mcpServers {
+		for _, t := range s.Tools {
+			runner.Tools.Add(t)
+		}
+	}
+	for _, merr := range mcpErrors {
+		fmt.Fprintf(os.Stderr, "peringatan MCP: %v\n", merr)
 	}
 
 	handler := &telegramHandler{

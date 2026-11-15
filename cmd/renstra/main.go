@@ -11,8 +11,6 @@ import (
 	"renstra/internal/cli"
 	"renstra/internal/config"
 	"renstra/internal/memory"
-	"renstra/internal/provider"
-	"renstra/internal/provider/openai"
 	"renstra/internal/skill"
 	"renstra/internal/store"
 	"renstra/internal/tool"
@@ -51,6 +49,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "mcp":
+		if err := mcpCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	case "usage":
 		if err := usageCmd(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -73,6 +76,7 @@ func usage() {
   renstra skill list [--global]      lihat skill terdaftar
   renstra skill add <n> <d> <b>      tambah skill baru
   renstra skill rm <n> [--global]    hapus skill
+  renstra mcp list                   daftar server MCP terdaftar
   renstra usage                      laporan pemakaian token & biaya
   renstra config path                lokasi direktori data (~/.renstra)`)
 	os.Exit(2)
@@ -102,23 +106,9 @@ func chatCmd(args []string) error {
 		return err
 	}
 
-	apiKey := ""
-	if pcfg.APIKeyEnv != "" {
-		apiKey = os.Getenv(pcfg.APIKeyEnv)
-	}
-
-	var prov provider.Provider
-	switch pcfg.Kind {
-	case "", "openai", "custom":
-		c, err := openai.New(pcfg, apiKey)
-		if err != nil {
-			return err
-		}
-		prov = c
-	case "anthropic":
-		return fmt.Errorf("provider anthropic belum diimplementasikan (Plan 4)")
-	default:
-		return fmt.Errorf("provider kind %q belum didukung", pcfg.Kind)
+	prov, err := buildProvider(pcfg)
+	if err != nil {
+		return err
 	}
 
 	home := config.Home()
@@ -152,22 +142,24 @@ func chatCmd(args []string) error {
 	if skillReg != nil {
 		tools = append(tools, tool.NewSkill(skillReg))
 	}
+	tools = append(tools, tool.NewCron(st, 1))
 
 	mc := pcfg.ModelConfig(model)
 	r := &agent.Runner{
-		Provider:  prov,
-		Tools:     tool.NewRegistry(),
-		Store:     st,
-		Model:     model,
-		Cwd:       workspace,
-		MaxIters:  cfg.Agent.MaxIterations,
-		MaxTokens: mc.MaxOutput,
-		PriceIn:   mc.PriceIn,
-		PriceOut:  mc.PriceOut,
-		Memory:    memStore,
-		Skills:    skillReg,
-		Approve:   cli.Approver(os.Stdin, os.Stdout),
-		Out:       os.Stdout,
+		Provider:      prov,
+		Tools:         tool.NewRegistry(),
+		Store:         st,
+		Model:         model,
+		Cwd:           workspace,
+		MaxIters:      cfg.Agent.MaxIterations,
+		MaxTokens:     mc.MaxOutput,
+		PriceIn:       mc.PriceIn,
+		PriceOut:      mc.PriceOut,
+		ContextWindow: mc.Context,
+		Memory:        memStore,
+		Skills:        skillReg,
+		Approve:       cli.Approver(os.Stdin, os.Stdout),
+		Out:           os.Stdout,
 	}
 	for _, t := range tools {
 		r.Tools.Add(t)

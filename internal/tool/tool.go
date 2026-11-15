@@ -21,6 +21,18 @@ type Tool interface {
 	Execute(ctx context.Context, args json.RawMessage) (string, error)
 }
 
+// chatIDKey lets per-chat tools (cron) know which chat they are running for.
+type chatIDKey struct{}
+
+func WithChatID(ctx context.Context, id int64) context.Context {
+	return context.WithValue(ctx, chatIDKey{}, id)
+}
+
+func ChatIDFrom(ctx context.Context) int64 {
+	id, _ := ctx.Value(chatIDKey{}).(int64)
+	return id
+}
+
 type Registry struct {
 	tools map[string]Tool
 }
