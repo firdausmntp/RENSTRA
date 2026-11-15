@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,22 +24,24 @@ type Client struct {
 	http   *http.Client
 }
 
-func New(cfg config.ProviderConfig, apiKey string) *Client {
+func New(cfg config.ProviderConfig, apiKey string) (*Client, error) {
 	timeout := time.Duration(cfg.Timeout)
 	if timeout == 0 {
 		timeout = 120 * time.Second
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if cfg.Proxy != "" {
-		if u, err := url.Parse(cfg.Proxy); err == nil {
-			transport.Proxy = http.ProxyURL(u)
+		u, err := url.Parse(cfg.Proxy)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("proxy tidak valid: %q", cfg.Proxy)
 		}
+		transport.Proxy = http.ProxyURL(u)
 	}
 	return &Client{
 		cfg:    cfg,
 		apiKey: apiKey,
 		http:   &http.Client{Timeout: timeout, Transport: transport},
-	}
+	}, nil
 }
 
 func (c *Client) Name() string { return "openai" }
@@ -69,10 +72,11 @@ type wireTool struct {
 }
 
 type wireRequest struct {
-	Model    string        `json:"model"`
-	Messages []wireMessage `json:"messages"`
-	Tools    []wireTool    `json:"tools,omitempty"`
-	Stream   bool          `json:"stream"`
+	Model     string        `json:"model"`
+	Messages  []wireMessage `json:"messages"`
+	Tools     []wireTool    `json:"tools,omitempty"`
+	MaxTokens int           `json:"max_tokens,omitempty"`
+	Stream    bool          `json:"stream"`
 }
 
 type streamChunk struct {
@@ -88,11 +92,16 @@ type streamChunk struct {
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
+	Error *struct {
+		Message string `json:"message"`
+		Code    any    `json:"code"`
+	} `json:"error"`
 }
 
 func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
@@ -101,8 +110,8 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		return nil, err
 	}
 
-	url := strings.TrimRight(c.cfg.BaseURL, "/") + c.cfg.Path
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := strings.TrimRight(c.cfg.BaseURL, "/") + c.cfg.Path
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -120,24 +129,33 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 		defer close(ch)
 		resp, err := c.http.Do(httpReq)
 		if err != nil {
-			ch <- provider.Event{Err: err}
+			send(ctx, ch, provider.Event{Err: err})
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode < 200 || resp.StatusCode > 299 {
 			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			ch <- provider.Event{Err: fmt.Errorf("provider %s: HTTP %d: %s", c.cfg.BaseURL, resp.StatusCode, strings.TrimSpace(string(raw)))}
+			send(ctx, ch, provider.Event{Err: fmt.Errorf("provider %s: HTTP %d: %s", c.cfg.BaseURL, resp.StatusCode, strings.TrimSpace(string(raw)))})
 			return
 		}
 
-		c.consume(resp.Body, ch)
+		c.consume(ctx, resp.Body, ch)
 	}()
 	return ch, nil
 }
 
+func send(ctx context.Context, ch chan<- provider.Event, ev provider.Event) bool {
+	select {
+	case ch <- ev:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (c *Client) buildRequest(req provider.Request) wireRequest {
-	out := wireRequest{Model: req.Model, Stream: true}
+	out := wireRequest{Model: req.Model, Stream: true, MaxTokens: req.MaxTokens, Messages: []wireMessage{}}
 	for _, m := range req.Messages {
 		wm := wireMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID}
 		for _, tc := range m.ToolCalls {
@@ -162,11 +180,14 @@ func (c *Client) buildRequest(req provider.Request) wireRequest {
 }
 
 // consume reads the SSE stream. Partial tool-call arguments are accumulated
-// until the stream ends; nothing is emitted half-parsed.
-func (c *Client) consume(r io.Reader, ch chan<- provider.Event) {
+// until the stream ends. A stream that stops without [DONE] (or a
+// finish_reason) is reported as an error: half a tool call must never run.
+func (c *Client) consume(ctx context.Context, r io.Reader, ch chan<- provider.Event) {
 	scanner := newSSEScanner(r)
 	partial := map[int]*provider.ToolCall{}
 	var usage *provider.Usage
+	sawDone := false
+	finished := false
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -175,19 +196,29 @@ func (c *Client) consume(r io.Reader, ch chan<- provider.Event) {
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			sawDone = true
 			break
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			ch <- provider.Event{Err: fmt.Errorf("chunk tidak valid: %w", err)}
+			send(ctx, ch, provider.Event{Err: fmt.Errorf("chunk tidak valid: %w", err)})
+			return
+		}
+		if chunk.Error != nil {
+			send(ctx, ch, provider.Event{Err: fmt.Errorf("provider error: %s", chunk.Error.Message)})
 			return
 		}
 		if chunk.Usage != nil {
 			usage = &provider.Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}
 		}
 		for _, choice := range chunk.Choices {
+			if choice.FinishReason != "" {
+				finished = true
+			}
 			if choice.Delta.Content != "" {
-				ch <- provider.Event{Text: choice.Delta.Content}
+				if !send(ctx, ch, provider.Event{Text: choice.Delta.Content}) {
+					return
+				}
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				p, ok := partial[tc.Index]
@@ -206,7 +237,14 @@ func (c *Client) consume(r io.Reader, ch chan<- provider.Event) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		ch <- provider.Event{Err: err}
+		if ctx.Err() != nil {
+			return
+		}
+		send(ctx, ch, provider.Event{Err: err})
+		return
+	}
+	if !sawDone && !finished {
+		send(ctx, ch, provider.Event{Err: errors.New("stream terputus tanpa [DONE]")})
 		return
 	}
 
@@ -219,10 +257,9 @@ func (c *Client) consume(r io.Reader, ch chan<- provider.Event) {
 	for _, i := range indexes {
 		calls = append(calls, *partial[i])
 	}
-	ch <- provider.Event{ToolCalls: calls, Usage: usage, Done: true}
+	send(ctx, ch, provider.Event{ToolCalls: calls, Usage: usage, Done: true})
 }
 
-// newSSEScanner tolerates long tool-call argument lines.
 func newSSEScanner(r io.Reader) *bufio.Scanner {
 	s := bufio.NewScanner(r)
 	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 
 	"renstra/internal/agent"
@@ -73,7 +74,11 @@ func chatCmd(args []string) error {
 	var prov provider.Provider
 	switch pcfg.Kind {
 	case "", "openai", "custom":
-		prov = openai.New(pcfg, apiKey)
+		c, err := openai.New(pcfg, apiKey)
+		if err != nil {
+			return err
+		}
+		prov = c
 	case "anthropic":
 		return fmt.Errorf("provider anthropic belum diimplementasikan (Plan 4)")
 	default:
@@ -94,7 +99,7 @@ func chatCmd(args []string) error {
 
 	r := &agent.Runner{
 		Provider:  prov,
-		Tools:     tool.NewRegistry(tool.NewTerminal(workspace, 0), tool.NewReadFile(), tool.NewWriteFile(), tool.NewPatch()),
+		Tools:     tool.NewRegistry(tool.NewTerminal(workspace, 0), tool.NewReadFile(workspace), tool.NewWriteFile(workspace), tool.NewPatch(workspace)),
 		Store:     st,
 		Model:     model,
 		Cwd:       workspace,
@@ -104,5 +109,7 @@ func chatCmd(args []string) error {
 		Out:       os.Stdout,
 	}
 	fmt.Printf("renstra — %s (%s). /help untuk bantuan.\n\n", model, filepath.Base(pcfg.BaseURL))
-	return cli.Run(context.Background(), r, 1, os.Stdin, os.Stdout)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return cli.Run(ctx, r, 1, os.Stdin, os.Stdout)
 }

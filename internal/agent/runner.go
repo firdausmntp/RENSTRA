@@ -3,9 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"renstra/internal/provider"
 	"renstra/internal/store"
@@ -15,6 +18,7 @@ import (
 const (
 	defaultMaxIters = 40
 	maxToolOutput   = 30 * 1024
+	saveTimeout     = 3 * time.Second
 )
 
 type Runner struct {
@@ -28,11 +32,11 @@ type Runner struct {
 	Approve   func(ctx context.Context, name string, args json.RawMessage) (bool, error)
 	Out       io.Writer
 
+	mu           sync.Mutex
 	cachedPrompt string
 }
 
-// Run executes one user turn: stream, run tools, repeat until the model
-// answers without tool calls or the iteration budget runs out.
+// Run executes one user turn.
 func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string, error) {
 	history, err := r.Store.Messages(ctx, chatID)
 	if err != nil {
@@ -64,9 +68,11 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 
 		var text strings.Builder
 		var calls []provider.ToolCall
+		var streamErr error
+
 		for ev := range ch {
-			if ev.Err != nil {
-				return "", ev.Err
+			if ev.Err != nil && streamErr == nil {
+				streamErr = ev.Err
 			}
 			if ev.Text != "" {
 				text.WriteString(ev.Text)
@@ -79,15 +85,21 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 			}
 		}
 
-		assistant := provider.Message{Role: provider.RoleAssistant, Content: text.String(), ToolCalls: calls}
-
+		// A turn cancelled mid-stream may still have partial text on the board.
+		// That partial text must be saved so the conversation history reflects
+		// what the user actually saw, but we always return the cancel error.
 		if ctx.Err() != nil {
-			if _, err := r.Store.AppendMessage(context.Background(), chatID, assistant); err != nil {
-				return text.String(), err
-			}
+			r.savePartial(chatID, text.String())
 			return text.String(), ctx.Err()
 		}
+		if streamErr != nil {
+			if text.Len() > 0 {
+				r.savePartial(chatID, text.String())
+			}
+			return text.String(), streamErr
+		}
 
+		assistant := provider.Message{Role: provider.RoleAssistant, Content: text.String(), ToolCalls: calls}
 		if _, err := r.Store.AppendMessage(ctx, chatID, assistant); err != nil {
 			return "", err
 		}
@@ -97,10 +109,17 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 			return text.String(), nil
 		}
 
-		for _, call := range calls {
+		// Execute tools. If the context is cancelled during execution, every
+		// tool call that was not run must still get a synthetic tool result
+		// so the assistant(tool_calls) message is never left unpaired.
+		for idx, call := range calls {
+			if ctx.Err() != nil {
+				r.fillCancelledTools(chatID, calls[idx:])
+				return text.String(), ctx.Err()
+			}
 			result := r.executeTool(ctx, call)
 			msg := provider.Message{Role: provider.RoleTool, Content: result, ToolCallID: call.ID}
-			if _, err := r.Store.AppendMessage(ctx, chatID, msg); err != nil {
+			if _, err := r.appendWithFallback(ctx, chatID, msg); err != nil {
 				return "", err
 			}
 			history = append(history, msg)
@@ -109,7 +128,13 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 	return "", fmt.Errorf("batas iterasi (%d) tercapai tanpa jawaban akhir", maxIters)
 }
 
-func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) string {
+func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			res = fmt.Sprintf("panic di tool %s: %v", call.Name, rec)
+		}
+	}()
+
 	t, ok := r.Tools.Get(call.Name)
 	if !ok {
 		return "tool tidak dikenal: " + call.Name
@@ -117,7 +142,10 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) string
 	if !json.Valid([]byte(call.Arguments)) {
 		return "argumen tool tidak valid: bukan JSON"
 	}
-	if t.Danger() && r.Approve != nil {
+	if t.Danger() {
+		if r.Approve == nil {
+			return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
+		}
 		allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
 		if err != nil {
 			return "approval gagal: " + err.Error()
@@ -138,8 +166,40 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) string
 	return truncated
 }
 
-// system is cached per Runner; memory arrives in Plan 3.
+func (r *Runner) savePartial(chatID int64, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	_, _ = r.Store.AppendMessage(ctx, chatID, provider.Message{Role: provider.RoleAssistant, Content: text})
+}
+
+func (r *Runner) fillCancelledTools(chatID int64, remaining []provider.ToolCall) {
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	for _, call := range remaining {
+		_, _ = r.Store.AppendMessage(ctx, chatID, provider.Message{
+			Role:       provider.RoleTool,
+			Content:    "dibatalkan sebelum dijalankan",
+			ToolCallID: call.ID,
+		})
+	}
+}
+
+func (r *Runner) appendWithFallback(ctx context.Context, chatID int64, m provider.Message) (int64, error) {
+	id, err := r.Store.AppendMessage(ctx, chatID, m)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		saveCtx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+		defer cancel()
+		return r.Store.AppendMessage(saveCtx, chatID, m)
+	}
+	return id, err
+}
+
 func (r *Runner) system() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.cachedPrompt == "" {
 		r.cachedPrompt = BuildPrompt(BuildParams{
 			Cwd:   r.Cwd,

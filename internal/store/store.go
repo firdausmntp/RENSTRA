@@ -18,25 +18,19 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
-	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
+	// Pragma query parameters apply to every connection opened on this pool.
+	dsn := "file:" + filepath.ToSlash(path) +
+		"?_pragma=busy_timeout(5000)" +
+		"&_pragma=foreign_keys(1)" +
+		"&_pragma=journal_mode(WAL)" +
+		"&_pragma=synchronous(NORMAL)" +
+		"&_pragma=temp_store(MEMORY)" +
+		"&_pragma=mmap_size(67108864)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
-	// One writer connection: removes SQLITE_BUSY and keeps write order stable.
 	db.SetMaxOpenConns(1)
-
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA temp_store=MEMORY",
-		"PRAGMA mmap_size=67108864",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
-	}
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -47,7 +41,6 @@ func Open(path string) (*Store, error) {
 }
 
 func (s *Store) migrate() error {
-	// kv must exist before the version can be read.
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`); err != nil {
 		return err
 	}
@@ -55,7 +48,10 @@ func (s *Store) migrate() error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if v > 0 {
+	if v > 1 {
+		return fmt.Errorf("database memakai schema versi %d, binary ini hanya mendukung versi 1 (perlu update renstra)", v)
+	}
+	if v == 1 {
 		return nil
 	}
 	if _, err := s.db.Exec(schemaSQL); err != nil {

@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -74,7 +75,8 @@ func TestRunExecutesToolThenAnswers(t *testing.T) {
 		{{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "terminal", Arguments: `{"cmd":"echo halo"}`}}}},
 		{{Text: "sudah dijalankan", Done: true}},
 	}}
-	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(tool.NewTerminal(t.TempDir(), 5*time.Second)), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
+	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(tool.NewTerminal(t.TempDir(), 5*time.Second)), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard,
+		Approve: func(context.Context, string, json.RawMessage) (bool, error) { return true, nil }}
 	got, err := r.Run(context.Background(), 1, "jalankan echo")
 	if err != nil {
 		t.Fatal(err)

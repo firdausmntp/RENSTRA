@@ -32,16 +32,17 @@ func TestOpenAppliesPragmasAndSchema(t *testing.T) {
 	}
 }
 
-func TestOpenIsIdempotent(t *testing.T) {
+func TestDowngradeIsRejected(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "state.db")
-	s1, err := store.Open(p)
+	s, err := store.Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s1.Close()
-	s2, err := store.Open(p)
-	if err != nil {
+	if _, err := s.DB().Exec(`UPDATE kv SET value = '99' WHERE key = 'schema_version'`); err != nil {
 		t.Fatal(err)
 	}
-	defer s2.Close()
+	s.Close()
+	if _, err := store.Open(p); err == nil || !strings.Contains(err.Error(), "versi 99") {
+		t.Fatalf("want downgrade error, got %v", err)
+	}
 }

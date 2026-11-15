@@ -24,7 +24,10 @@ func TestStreamAssemblesToolCallFromChunks(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := openai.New(config.ProviderConfig{BaseURL: srv.URL, Path: "/chat/completions", Timeout: config.Duration(5 * time.Second)}, "k")
+	c, err := openai.New(config.ProviderConfig{BaseURL: srv.URL, Path: "/chat/completions", Timeout: config.Duration(5 * time.Second)}, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ch, err := c.Stream(context.Background(), provider.Request{Model: "m", Messages: []provider.Message{{Role: provider.RoleUser, Content: "x"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -49,7 +52,10 @@ func TestStreamSurfacesHTTPError(t *testing.T) {
 		http.Error(w, `{"error":{"message":"bad key"}}`, http.StatusUnauthorized)
 	}))
 	defer srv.Close()
-	c := openai.New(config.ProviderConfig{BaseURL: srv.URL, Path: "/chat/completions"}, "k")
+	c, err := openai.New(config.ProviderConfig{BaseURL: srv.URL, Path: "/chat/completions"}, "k")
+	if err != nil {
+		t.Fatal(err)
+	}
 	ch, err := c.Stream(context.Background(), provider.Request{Model: "m"})
 	if err != nil {
 		t.Fatal(err)
