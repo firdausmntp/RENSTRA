@@ -144,12 +144,18 @@ func chatCmd(args []string) error {
 	}
 	tools = append(tools, tool.NewCron(st, 1))
 
+	auxModel := cfg.Agent.AuxModel
+	if auxModel == "" {
+		auxModel = model
+	}
+
 	mc := pcfg.ModelConfig(model)
 	r := &agent.Runner{
 		Provider:      prov,
 		Tools:         tool.NewRegistry(),
 		Store:         st,
 		Model:         model,
+		AuxModel:      auxModel,
 		Cwd:           workspace,
 		MaxIters:      cfg.Agent.MaxIterations,
 		MaxTokens:     mc.MaxOutput,

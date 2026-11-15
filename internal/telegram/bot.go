@@ -49,6 +49,7 @@ type Bot struct {
 
 	mu          sync.Mutex
 	seen        map[int64]struct{}
+	seenOrder   []int64
 	cancels     map[int64]turnHandle
 	locks       map[int64]*chatLock
 	pending     map[int64]*pendingApproval
@@ -110,7 +111,7 @@ func New(cfg Config) (*Bot, error) {
 // restart before polling resumes.
 func (b *Bot) MarkSeen(id int64) {
 	b.mu.Lock()
-	b.seen[id] = struct{}{}
+	b.markSeenLocked(id)
 	b.mu.Unlock()
 }
 
@@ -179,13 +180,28 @@ func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 	return ups, nil
 }
 
+// seenCap bounds the in-memory dedup set. Updates older than the Telegram
+// retention window are already pruned from the store, so dropping the oldest
+// in-memory ids is safe.
+const seenCap = 2000
+
+func (b *Bot) markSeenLocked(id int64) {
+	b.seen[id] = struct{}{}
+	b.seenOrder = append(b.seenOrder, id)
+	if len(b.seenOrder) > seenCap {
+		drop := b.seenOrder[0]
+		b.seenOrder = b.seenOrder[1:]
+		delete(b.seen, drop)
+	}
+}
+
 func (b *Bot) handleUpdate(ctx context.Context, h Handler, u update) {
 	b.mu.Lock()
 	if _, dup := b.seen[u.UpdateID]; dup {
 		b.mu.Unlock()
 		return
 	}
-	b.seen[u.UpdateID] = struct{}{}
+	b.markSeenLocked(u.UpdateID)
 	onSeen := b.onSeen
 	b.mu.Unlock()
 

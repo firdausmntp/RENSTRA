@@ -111,36 +111,73 @@ func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provi
 	}
 
 	endpoint := strings.TrimRight(c.cfg.BaseURL, "/") + c.cfg.Path
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Accept", "text/event-stream")
-	if c.apiKey != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
-	for k, v := range c.cfg.Headers {
-		httpReq.Header.Set(k, v)
-	}
 
 	ch := make(chan provider.Event)
 	go func() {
 		defer close(ch)
-		resp, err := c.http.Do(httpReq)
-		if err != nil {
-			send(ctx, ch, provider.Event{Err: err})
+
+		for attempt := 1; attempt <= provider.MaxAttempts; attempt++ {
+			if ctx.Err() != nil {
+				send(ctx, ch, provider.Event{Err: ctx.Err()})
+				return
+			}
+
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+			if err != nil {
+				send(ctx, ch, provider.Event{Err: err})
+				return
+			}
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Accept", "text/event-stream")
+			if c.apiKey != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+			}
+			for k, v := range c.cfg.Headers {
+				httpReq.Header.Set(k, v)
+			}
+
+			resp, err := c.http.Do(httpReq)
+			if err != nil {
+				if ctx.Err() != nil {
+					send(ctx, ch, provider.Event{Err: ctx.Err()})
+					return
+				}
+				if attempt < provider.MaxAttempts {
+					select {
+					case <-ctx.Done():
+						send(ctx, ch, provider.Event{Err: ctx.Err()})
+						return
+					case <-time.After(provider.Backoff(attempt, "")):
+						continue
+					}
+				}
+				send(ctx, ch, provider.Event{Err: err})
+				return
+			}
+
+			if provider.Retryable(resp.StatusCode) && attempt < provider.MaxAttempts {
+				retryAfter := resp.Header.Get("Retry-After")
+				resp.Body.Close()
+				select {
+				case <-ctx.Done():
+					send(ctx, ch, provider.Event{Err: ctx.Err()})
+					return
+				case <-time.After(provider.Backoff(attempt, retryAfter)):
+					continue
+				}
+			}
+
+			if resp.StatusCode < 200 || resp.StatusCode > 299 {
+				raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+				resp.Body.Close()
+				send(ctx, ch, provider.Event{Err: fmt.Errorf("provider %s: HTTP %d: %s", c.cfg.BaseURL, resp.StatusCode, strings.TrimSpace(string(raw)))})
+				return
+			}
+
+			c.consume(ctx, resp.Body, ch)
+			resp.Body.Close()
 			return
 		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode < 200 || resp.StatusCode > 299 {
-			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("provider %s: HTTP %d: %s", c.cfg.BaseURL, resp.StatusCode, strings.TrimSpace(string(raw)))})
-			return
-		}
-
-		c.consume(ctx, resp.Body, ch)
 	}()
 	return ch, nil
 }

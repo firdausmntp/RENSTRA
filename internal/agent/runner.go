@@ -38,14 +38,42 @@ type Runner struct {
 	PriceIn       float64 // USD per 1M tokens
 	PriceOut      float64 // USD per 1M tokens
 	ContextWindow int     // Model context tokens; defaults to 32000
+	AuxModel      string  // Model used to summarize during compaction; defaults to Model
 	SubagentCall  func(ctx context.Context, task string) (string, error)
 
 	mu           sync.Mutex
 	cachedPrompt string
+	chatLocks    map[int64]*sync.Mutex
+}
+
+// lockChat serializes turns per chat. The Telegram gateway already interrupts
+// a running turn, but cron fires on its own schedule, so without this two
+// writers could interleave one chat's history and break tool-call pairing.
+func (r *Runner) lockChat(chatID int64) func() {
+	r.mu.Lock()
+	if r.chatLocks == nil {
+		r.chatLocks = map[int64]*sync.Mutex{}
+	}
+	l := r.chatLocks[chatID]
+	if l == nil {
+		l = &sync.Mutex{}
+		r.chatLocks[chatID] = l
+	}
+	r.mu.Unlock()
+
+	l.Lock()
+	return l.Unlock
 }
 
 // Run executes one user turn.
 func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string, error) {
+	unlock := r.lockChat(chatID)
+	defer unlock()
+
+	// Memory and skills may have been changed by the previous turn's tools, so
+	// the system prompt is rebuilt once per turn instead of once per process.
+	r.invalidatePrompt()
+
 	history, err := r.Store.Messages(ctx, chatID)
 	if err != nil {
 		return "", err
@@ -66,8 +94,13 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 		if win <= 0 {
 			win = 32000
 		}
-		if ShouldCompact(history, win, 0.7) {
-			history = CompactHistory(history, 6, "Percakapan sebelumnya telah diringkas untuk menghemat ruang konteks.")
+		if ShouldCompact(history, win, compactThreshold) {
+			summary := r.summarize(ctx, history)
+			if compacted, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err == nil && len(compacted) > 0 {
+				history = compacted
+			} else {
+				history = CompactHistory(history, keepTurns, summary)
+			}
 		}
 
 		req := provider.Request{
@@ -252,6 +285,12 @@ func (r *Runner) system() string {
 	return r.cachedPrompt
 }
 
+func (r *Runner) invalidatePrompt() {
+	r.mu.Lock()
+	r.cachedPrompt = ""
+	r.mu.Unlock()
+}
+
 // RunSubagent fulfills tool.SubagentRunner. It creates an isolated child
 // session with its own history and budget, running under the same provider.
 func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
@@ -259,17 +298,21 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		return r.SubagentCall(ctx, task)
 	}
 	child := &Runner{
-		Provider:  r.Provider,
-		Tools:     r.Tools,
-		Store:     r.Store,
-		Model:     r.Model,
-		Cwd:       r.Cwd,
-		MaxIters:  15,
-		MaxTokens: r.MaxTokens,
-		Memory:    r.Memory,
-		Skills:    r.Skills,
-		Approve:   r.Approve,
-		Out:       io.Discard,
+		Provider:      r.Provider,
+		Tools:         r.Tools,
+		Store:         r.Store,
+		Model:         r.Model,
+		AuxModel:      r.AuxModel,
+		Cwd:           r.Cwd,
+		MaxIters:      15,
+		MaxTokens:     r.MaxTokens,
+		PriceIn:       r.PriceIn,
+		PriceOut:      r.PriceOut,
+		ContextWindow: r.ContextWindow,
+		Memory:        r.Memory,
+		Skills:        r.Skills,
+		Approve:       r.Approve,
+		Out:           io.Discard,
 	}
 	// Synthetic high chat_id to keep subagent history separate from the main chat.
 	subID := time.Now().UnixNano()

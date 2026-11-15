@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -26,8 +27,9 @@ type ServerConfig struct {
 }
 
 type Server struct {
-	Name  string
-	Tools []tool.Tool
+	Name   string
+	Client *Client
+	Tools  []tool.Tool
 }
 
 type rpcError struct {
@@ -63,8 +65,17 @@ type Client struct {
 	pending map[int64]chan rpcMessage
 	nextID  int64
 	closed  bool
+	dead    bool
 
 	tools []tool.Tool
+}
+
+// Dead reports whether the transport has ended, so a caller can reconnect
+// instead of handing every later call to a closed pipe.
+func (c *Client) Dead() bool {
+	c.pendMu.Lock()
+	defer c.pendMu.Unlock()
+	return c.dead
 }
 
 // newClientWithStreams builds a client over arbitrary streams; the transport is
@@ -84,9 +95,7 @@ func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
 	}
 
 	cmd := exec.Command(cfg.Command, cfg.Args...)
-	if len(cfg.Env) > 0 {
-		cmd.Env = cfg.Env
-	}
+	cmd.Env = mergeEnv(cfg.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("MCP server %q: %w", cfg.Name, err)
@@ -119,9 +128,20 @@ func ConnectAll(ctx context.Context, cfgs []ServerConfig) ([]Server, []error) {
 			errs = append(errs, err)
 			continue
 		}
-		servers = append(servers, Server{Name: cfg.Name, Tools: c.Tools()})
+		servers = append(servers, Server{Name: cfg.Name, Client: c, Tools: c.Tools()})
 	}
 	return servers, errs
+}
+
+// mergeEnv gives the MCP process a working environment (PATH, HOME, etc.)
+// with user overrides on top.
+func mergeEnv(custom []string) []string {
+	base := os.Environ()
+	if len(custom) == 0 {
+		return base
+	}
+	out := append([]string(nil), base...)
+	return append(out, custom...)
 }
 
 func (c *Client) handshake(ctx context.Context) error {
@@ -280,8 +300,9 @@ func (c *Client) readLoop() {
 		}
 	}
 
-	// Stream mati: bangunkan semua penunggu.
+	// Stream mati: bangunkan semua penunggu dan tandai client mati.
 	c.pendMu.Lock()
+	c.dead = true
 	for id, ch := range c.pending {
 		close(ch)
 		delete(c.pending, id)
@@ -303,6 +324,9 @@ func (t *mcpTool) Schema() json.RawMessage { return t.schema }
 func (t *mcpTool) Danger() bool            { return true }
 
 func (t *mcpTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
+	if t.client.Dead() {
+		return "", fmt.Errorf("server MCP %q telah mati, perlu restart", t.client.name)
+	}
 	if len(args) == 0 || string(args) == "null" {
 		args = json.RawMessage(`{}`)
 	}

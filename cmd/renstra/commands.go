@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -365,8 +367,8 @@ func serveCmd() error {
 	}
 	defer st.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Seed bot with recently seen updates so a restart never answers twice.
 	_ = st.PruneUpdatesSeen(ctx)
@@ -413,11 +415,17 @@ func serveCmd() error {
 	}
 
 	mc := pcfg.ModelConfig(model)
+	auxModel := cfg.Agent.AuxModel
+	if auxModel == "" {
+		auxModel = model
+	}
+
 	runner := &agent.Runner{
 		Provider:      prov,
 		Tools:         tool.NewRegistry(),
 		Store:         st,
 		Model:         model,
+		AuxModel:      auxModel,
 		Cwd:           workspace,
 		MaxIters:      cfg.Agent.MaxIterations,
 		MaxTokens:     mc.MaxOutput,
@@ -445,6 +453,7 @@ func serveCmd() error {
 	// Connect MCP servers
 	mcpServers, mcpErrors := mcp.ConnectAll(ctx, loadMCPConfigs())
 	for _, s := range mcpServers {
+		defer s.Client.Close()
 		for _, t := range s.Tools {
 			runner.Tools.Add(t)
 		}
@@ -459,9 +468,19 @@ func serveCmd() error {
 		store:  st,
 	}
 
-	// Cron runner in background
+	// Cron runner in background with panic recovery
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Fprintf(os.Stderr, "panic di cron: %v\n", r)
+			}
+		}()
 		_ = cron.Run(ctx, st, time.Local, func(cctx context.Context, job cron.Job) {
+			defer func() {
+				if r := recover(); r != nil {
+					_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d panic]: %v", job.ID, r))
+				}
+			}()
 			ans, err := runner.Run(cctx, job.ChatID, job.Prompt)
 			if err != nil {
 				_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d error]: %v", job.ID, err))
@@ -481,7 +500,14 @@ type telegramHandler struct {
 	store  *store.Store
 }
 
-func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string) (string, error) {
+func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string) (reply string, err error) {
+	// A panic inside a tool must not take the gateway down with it.
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "panic saat menangani chat %d: %v\n", chatID, r)
+			reply, err = "", fmt.Errorf("panic internal: %v", r)
+		}
+	}()
 	return h.runner.Run(ctx, chatID, text)
 }
 
