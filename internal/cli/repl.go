@@ -42,6 +42,7 @@ func Run(ctx context.Context, r *agent.Runner, chatID int64, in io.Reader, out i
 				if err := r.Store.SessionBreak(ctx, chatID); err != nil {
 					return err
 				}
+				r.InvalidatePrompt()
 				fmt.Fprintln(out, "sesi baru")
 			case "/help":
 				fmt.Fprintln(out, helpText)

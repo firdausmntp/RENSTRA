@@ -70,10 +70,6 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 	unlock := r.lockChat(chatID)
 	defer unlock()
 
-	// Memory and skills may have been changed by the previous turn's tools, so
-	// the system prompt is rebuilt once per turn instead of once per process.
-	r.invalidatePrompt()
-
 	history, err := r.Store.Messages(ctx, chatID)
 	if err != nil {
 		return "", err
@@ -217,6 +213,11 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 	if err != nil {
 		return "error: " + err.Error()
 	}
+	// Memory and skill writes change the system prompt, so the frozen snapshot
+	// is dropped only when a tool actually mutated it.
+	if call.Name == "memory" || call.Name == "skill" {
+		r.invalidatePrompt()
+	}
 	truncated, terr := tool.Truncate(out, maxToolOutput, r.Cwd, call.ID)
 	if terr != nil {
 		return out
@@ -283,6 +284,10 @@ func (r *Runner) system() string {
 		r.cachedPrompt = BuildPrompt(params)
 	}
 	return r.cachedPrompt
+}
+
+func (r *Runner) InvalidatePrompt() {
+	r.invalidatePrompt()
 }
 
 func (r *Runner) invalidatePrompt() {
