@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Safe-padded rounded container so stroke never clips at viewport edge -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#0B1120" stroke="#1E293B" stroke-width="2"/>
+
+  <!-- Centered geometric 'R' monogram (x: 38..92, y: 34..94) -->
+  <!-- Stem + upper bowl -->
+  <path fill-rule="evenodd" clip-rule="evenodd"
+    d="M38 34H72C83.0457 34 92 42.9543 92 54C92 65.0457 83.0457 74 72 74H52V94H38V34ZM52 46V62H71C75.4183 62 79 58.4183 79 54C79 49.5817 75.4183 46 71 46H52Z"
+    fill="#F8FAFC"/>
+
+  <!-- Folded paper-dart leg -->
+  <path d="M58 74H75L92 94H74L58 74Z" fill="#38BDF8"/>
+</svg>

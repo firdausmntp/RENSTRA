@@ -1,32 +1,55 @@
-# RENSTRA
+<p align="center">
+  <img src="assets/banner.svg" alt="RENSTRA Banner" width="100%" />
+</p>
 
-**Autonomous Self-Hosted AI Agent in Pure Go — Hermes-Inspired, Telegram-First.**
+<p align="center">
+  <strong>Self-Hosted Telegram-First AI Agent in Pure Go</strong><br/>
+  Terinspirasi dari perilaku inti Hermes Agent — ringan, satu binary, tanpa CGO, siap jalan di VPS kecil.
+</p>
 
-RENSTRA adalah AI agent pribadi yang ringan, berjalan sebagai **satu binary Go tanpa CGO** (`CGO_ENABLED=0`), dirancang untuk VPS murah maupun mesin lokal, dan dikendalikan langsung dari **Telegram** (atau REPL terminal). RENSTRA mengadopsi perilaku inti Hermes Agent — *persistent memory*, *self-authoring skills*, *auto-compaction*, *multi-provider failover*, *cron scheduler*, *subagent delegation*, dan *MCP plugins* — tanpa beban runtime yang berat.
+<p align="center">
+  <a href="https://github.com/firdausmntp/RENSTRA"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
+  <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
+  <img src="https://img.shields.io/badge/Gateway-Telegram--First-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram-First" />
+  <img src="https://img.shields.io/badge/Storage-SQLite%20WAL-0F172A?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite WAL" />
+</p>
+
+<p align="center">
+  <a href="#fitur-utama">Fitur</a> •
+  <a href="#arsitektur">Arsitektur</a> •
+  <a href="#instalasi--quick-start">Quick Start</a> •
+  <a href="#perintah-in-chat-telegram">Perintah Telegram</a> •
+  <a href="#konfigurasi">Konfigurasi</a> •
+  <a href="#deployment-vps-systemd">Deploy VPS</a>
+</p>
+
+---
+
+**RENSTRA** adalah autonomous AI agent self-hosted berbahasa Go yang dikendalikan langsung lewat **Telegram** (dan REPL terminal sebagai fallback). Dibangun dengan filosofi *single binary, zero-CGO* (`modernc.org/sqlite`), RENSTRA menghadirkan fitur penting seperti *persistent memory*, *4-layer self-authoring skills*, *auto-compaction*, *multi-provider failover*, *cron scheduler*, *subagent delegation*, dan integrasi *MCP* tanpa overhead runtime Python/Node di inti agent.
 
 ---
 
 ## Fitur Utama
 
 ### Telegram-First Experience
-- **Live Streaming & Status Tool:** Balasan LLM mengalir real-time melalui edit pesan ter-throttle (`StreamWriter`) dan menampilkan progres tool yang sedang dieksekusi (`⏳ Menjalankan ...`).
+- **Live Streaming & Status Tool:** Balasan LLM mengalir real-time melalui edit pesan ter-throttle (`StreamWriter`) disertai status tool yang sedang berjalan (`⏳ Menjalankan ...`).
 - **Indikator Typing Otomatis:** Mengirim `sendChatAction: typing` secara berkala selama agent berpikir atau mengeksekusi perintah.
-- **Approval Inline Keyboard:** Perintah berisiko (`terminal`, tool MCP) mengirim tombol **Setuju / Tolak** langsung di chat Telegram dengan timeout 120 detik, lalu mengedit pesan menjadi `✅ Disetujui` / `❌ Ditolak` begitu keputusan dipilih.
-- **Penerimaan Dokumen & Foto:** File dan foto (beserta `caption`) yang dikirim ke bot otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/` dan diteruskan ke agent.
-- **Interrupt & Anti-Dobel Tahan Restart:** Pesan baru di chat yang sibuk membatalkan turn lama secara aman tanpa merusak pasangan tool-call di SQLite; `updates_seen` mencegah balasan ganda setelah proses restart; turn yang terputus akibat restart diberi notifikasi otomatis.
+- **Approval Inline Keyboard:** Perintah berisiko (`terminal`, tool MCP) mengirim tombol **Setuju / Tolak** di Telegram (timeout 120 detik), lalu otomatis mengedit pesan menjadi `✅ Disetujui` atau `❌ Ditolak` saat keputusan dipilih.
+- **Penerimaan Dokumen & Foto:** File dan foto (beserta `caption`) otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/` dan diteruskan ke agent.
+- **Interrupt & Anti-Dobel Tahan Restart:** Pesan baru di chat yang sibuk menginterupsi turn berjalan secara aman tanpa memutus pasangan `tool_calls` di SQLite. Dedup `updates_seen` mencegah balasan ganda setelah restart, dan turn yang terputus akibat restart diberi notifikasi otomatis.
 
 ### Self-Improving Memory & 4-Layer Skills
-- **Persistent Memory (`MEMORY.md` & `USER.md`):** Catatan kerja agent (maks 2.200 karakter) dan profil pengguna (maks 1.375 karakter) di-snapshot saat sesi dimulai agar *prompt prefix cache* tetap hangat, dengan pengingat berkala tiap 12 pesan user.
-- **4-Layer Skills (`SKILL.md`):** Mendukung skill lokal proyek (`.skills/` dan `skills/` di workspace), skill milik instance (`$RENSTRA_HOME/skills/`, writable oleh agent), dan skill global. Agent dapat menyimpan prosedur baru lewat tool `skill` (`action=save`).
+- **Persistent Memory (`MEMORY.md` & `USER.md`):** Catatan kerja agent (maks 2.200 karakter) dan profil pengguna (maks 1.375 karakter) di-snapshot saat sesi dimulai agar *prompt prefix cache* tetap hangat, dengan pengingat berkala setiap 12 pesan user.
+- **4-Layer Skills (`SKILL.md`):** Mendukung skill lokal proyek (`.skills/` dan `skills/` di workspace), skill instance (`$RENSTRA_HOME/skills/`, writable oleh agent), dan skill global. Agent dapat menyimpan prosedur baru lewat tool `skill` (`action=save`).
 
 ### Smart Context, Pencarian & Keamanan
-- **Auto-Compaction & `session_search`:** Saat pemakaian token mendekati ambang konteks model (default 70%), percakapan lama diringkas memakai `aux_model` sambil mempertahankan grup `assistant(tool_calls)` + hasil `tool` utuh. Riwayat lama tetap tersimpan di SQLite dan dapat dicari kembali dengan `session_search`.
+- **Auto-Compaction & `session_search`:** Saat pemakaian token melewati ambang konteks model (default 70%), percakapan lama diringkas memakai `aux_model` sambil menjaga grup `assistant(tool_calls)` + `tool` tetap utuh. Riwayat lama tetap dapat dicari kembali lewat `session_search`.
 - **Multi-Provider & Auto-Failover:** Mendukung OpenAI, Anthropic, dan endpoint OpenAI-compatible kustom (termasuk proxy & header kustom), lengkap dengan alias model dan rantai `fallbacks`.
 - **Guardrails & Kontrol Biaya:**
   - Aturan approval deklaratif (`mode: prompt | auto | deny`, `always_allowed`, `always_denied`).
-  - Deteksi loop otomatis jika tool & argumen identik dipanggil 3× berturut-turut.
-  - Batas timeout per turn, pelaporan biaya/token harian & 30 hari (`/usage`, `/insights`), peringatan `warn_daily_usd`, dan hard cap opsional `max_daily_usd` / `max_daily_tokens`.
-  - Konten eksternal (`web_fetch`, `web_search`, `mcp`) ditandai `[untrusted]`; subprocess `terminal` hanya mewarisi environment allowlist tanpa membocorkan API key.
+  - Deteksi loop otomatis jika tool dan argumen identik dipanggil 3× berturut-turut.
+  - Batas timeout per turn, pelaporan biaya/token (`/usage`, `/insights`), peringatan `warn_daily_usd`, dan hard cap opsional `max_daily_usd` / `max_daily_tokens`.
+  - Konten luar (`web_fetch`, `web_search`, `mcp`) ditandai `[untrusted]`; subprocess `terminal` hanya mewarisi environment allowlist tanpa membocorkan API key.
 
 ---
 
@@ -44,7 +67,7 @@ flowchart LR
     RUN --> MEM["Memory & 4-Layer Skills"]
     RUN --> TOOLS["Tools & MCP"]
 
-    TOOLS --> T1["terminal / file / patch"]
+    TOOLS --> T1["terminal / read_file / write_file / patch"]
     TOOLS --> T2["web_search (DDG) / web_fetch"]
     TOOLS --> T3["session_search / memory / skill / cron / delegate"]
     TOOLS --> MCP["MCP Servers (mcp.yaml)"]
@@ -54,23 +77,25 @@ flowchart LR
 
 ## Instalasi & Quick Start
 
-### 1. Build dari Source
+### 1. Clone & Build dari Source
 
-Prasyarat: **Go 1.23+** (tidak perlu `gcc` / CGO).
+Prasyarat: **Go 1.23+** (tanpa perlu `gcc` / CGO).
 
 ```bash
-# Clone repositori lalu masuk ke folder proyek
-go build -o renstra ./cmd/renstra
+git clone https://github.com/firdausmntp/RENSTRA.git
+cd RENSTRA
+
+# Build binary lokal
+make build
+# atau langsung:
+CGO_ENABLED=0 go build -o renstra ./cmd/renstra
 ```
 
 Cross-compile dari mesin lokal untuk VPS Linux:
 
 ```bash
-# Linux amd64
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o renstra-linux-amd64 ./cmd/renstra
-
-# Linux arm64
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o renstra-linux-arm64 ./cmd/renstra
+make linux-amd64   # menghasilkan renstra-linux-amd64
+make linux-arm64   # menghasilkan renstra-linux-arm64
 ```
 
 ### 2. Setup Konfigurasi Awal
@@ -79,7 +104,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o renstra-linux-arm64 ./cmd/rens
 ./renstra setup
 ```
 
-Wizard interaktif akan menanyakan Token Bot Telegram, provider (`openai` / `anthropic`), base URL, nama environment variable API key, model default, Telegram User ID yang diizinkan, dan mode approval, lalu menulis `config.yaml` (izin `0600`).
+Wizard interaktif akan menanyakan Token Bot Telegram, provider (`openai` / `anthropic`), base URL, nama environment variable API key, model default, Telegram User ID yang diizinkan, dan mode approval, lalu menulis `config.yaml` (izin `0600`). Alternatifnya, salin [`config.example.yaml`](config.example.yaml).
 
 ### 3. Set API Key & Jalankan Gateway Telegram
 
@@ -91,7 +116,7 @@ export OPENAI_API_KEY="sk-..."
 ./renstra serve
 ```
 
-> Untuk mencoba langsung lewat terminal tanpa Telegram: `./renstra chat`
+> Ingin mencoba langsung di terminal tanpa Telegram? Jalankan `./renstra chat`.
 
 ---
 
@@ -134,104 +159,17 @@ export OPENAI_API_KEY="sk-..."
 
 ---
 
-## Contoh Konfigurasi
+## Konfigurasi
 
-### `config.yaml`
+Lokasi default `$RENSTRA_HOME`:
+- **Linux:** `~/.config/renstra/`
+- **macOS:** `~/Library/Application Support/renstra/`
+- **Windows:** `%APPDATA%\renstra\`
+- **Kustom:** set environment variable `RENSTRA_HOME=/path/kustom`
 
-Lokasi default:
-- Linux: `~/.config/renstra/config.yaml`
-- macOS: `~/Library/Application Support/renstra/config.yaml`
-- Windows: `%APPDATA%\renstra\config.yaml`
-- Kustom: set environment variable `RENSTRA_HOME=/path/kustom`
-
-```yaml
-default_model: "utama:gpt-4o-mini"
-fallbacks:
-  - "cadangan:claude-sonnet-4-5"
-
-providers:
-  utama:
-    kind: "openai"                      # openai | anthropic | custom
-    base_url: "https://api.openai.com/v1"
-    api_key_env: "OPENAI_API_KEY"
-    default_model: "gpt-4o-mini"
-    timeout: 120s
-    models:
-      gpt-4o-mini:
-        context: 128000
-        max_output: 4096
-        price_in: 0.15
-        price_out: 0.60
-  cadangan:
-    kind: "anthropic"
-    base_url: "https://api.anthropic.com"
-    api_key_env: "ANTHROPIC_API_KEY"
-    default_model: "claude-sonnet-4-5"
-    models:
-      claude-sonnet-4-5:
-        context: 200000
-        max_output: 8192
-        price_in: 3.00
-        price_out: 15.00
-
-aliases:
-  cepat: "utama:gpt-4o-mini"
-  sonnet: "cadangan:claude-sonnet-4-5"
-
-approval:
-  mode: "prompt"                        # prompt | auto | deny
-  timeout: 120s
-  always_allowed:
-    - "terminal:git status"
-    - "terminal:ls"
-  always_denied:
-    - "terminal:rm -rf"
-
-telegram:
-  token: "123456:ABC-DEF..."
-  allowed_users:
-    - 123456789
-  poll_timeout: 30s
-
-agent:
-  system_prompt_prefix: "kamu adalah asisten teknis yang ringkas dan akurat"
-  max_iterations: 40
-  max_turn_timeout: 15m
-  aux_model: "gpt-4o-mini"
-  auto_compact: true
-  compact_threshold: 0.7
-
-tools:
-  terminal: true
-  read_file: true
-  write_file: true
-  patch: true
-  web_fetch: true
-  web_search: true
-  memory: true
-  skill: true
-  cron: true
-  delegate: true
-  session_search: true
-
-limits:
-  warn_daily_usd: 1.0
-  max_daily_usd: 0                      # 0 = nonaktif
-  max_daily_tokens: 0                   # 0 = nonaktif
-```
-
-### `mcp.yaml` (Opsional)
-
-Letakkan di `$RENSTRA_HOME/mcp.yaml` (atau `<UserConfigDir>/renstra/global/mcp.yaml` untuk lintas profil):
-
-```yaml
-servers:
-  filesystem:
-    command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/srv/projects"]
-    env:
-      - "NODE_ENV=production"
-```
+Template siap pakai tersedia di repositori:
+- [`config.example.yaml`](config.example.yaml) — Konfigurasi provider, fallback, alias, approval rules, Telegram, agent, tools, dan limits.
+- [`mcp.example.yaml`](mcp.example.yaml) — Konfigurasi server MCP eksternal (per instance atau `<UserConfigDir>/renstra/global/mcp.yaml`).
 
 ---
 
@@ -255,9 +193,9 @@ $RENSTRA_HOME/
 
 ---
 
-## Deployment di VPS dengan `systemd`
+## Deployment VPS (`systemd`)
 
-Simpan binary ke `/usr/local/bin/renstra`, lalu buat `/etc/systemd/system/renstra.service`:
+Salin binary hasil `make linux-amd64` ke `/usr/local/bin/renstra`, lalu buat `/etc/systemd/system/renstra.service`:
 
 ```ini
 [Unit]
@@ -278,10 +216,21 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
-Aktifkan service:
-
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now renstra
 sudo journalctl -u renstra -f
+```
+
+---
+
+## Pengembangan & Kontribusi
+
+- Panduan arsitektur, dependency graph, dan invarian kode: [`AGENTS.md`](AGENTS.md)
+- Spesifikasi desain: [`docs/superpowers/specs/2026-11-15-renstra-agent-design.md`](docs/superpowers/specs/2026-11-15-renstra-agent-design.md)
+- Roadmap v1.1 & v1.2: [`docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md`](docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md)
+
+```bash
+make test   # go test -count=1 ./...
+make vet    # go vet ./...
 ```

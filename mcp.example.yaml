@@ -1,0 +1,18 @@
+# RENSTRA example MCP configuration
+# Salin ke $RENSTRA_HOME/mcp.yaml (atau <UserConfigDir>/renstra/global/mcp.yaml).
+
+servers:
+  filesystem:
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "/srv/projects"
+    env:
+      - "NODE_ENV=production"
+
+  # github:
+  #   command: "npx"
+  #   args: ["-y", "@modelcontextprotocol/server-github"]
+  #   env:
+  #     - "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."
