@@ -1,8 +1,52 @@
-# build output
+# Build & cross-compile outputs
 /renstra
 /renstra.exe
+/renstra-*
+/bin/
+/dist/
 *.exe
+*.dll
+*.so
+*.dylib
 *.test
+*.out
+coverage.txt
+coverage.html
 
-# agent runtime state (never committed)
+# Secrets & local configuration (never commit)
+.env
+.env.*
+!.env.example
+config.yaml
+mcp.yaml
+!config.example.yaml
+!mcp.example.yaml
+*.pem
+*.key
+*.secret
+
+# SQLite databases & RENSTRA runtime state
+.renstra/
+workspace/
+.tool-output/
+inbox/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+.renstra-*.tmp
+.tmp-*
+*.tmp
+*.log
 .superpowers/
+
+# Editors & OS artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini

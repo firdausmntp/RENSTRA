@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 
 	"renstra/internal/agent"
 	"renstra/internal/cli"
@@ -125,6 +126,8 @@ func chatCmd(args []string) error {
 
 	memStore, _ := memory.Open(filepath.Join(home, "memory"))
 	skillReg, _ := skill.Load(
+		skill.Layer{Dir: filepath.Join(workspace, ".skills"), Writable: false},
+		skill.Layer{Dir: filepath.Join(workspace, "skills"), Writable: false},
 		skill.Layer{Dir: filepath.Join(home, "skills"), Writable: true},
 		skill.Layer{Dir: filepath.Join(globalBaseDir(), "skills"), Writable: false},
 	)
@@ -135,6 +138,8 @@ func chatCmd(args []string) error {
 		tool.NewWriteFile(workspace),
 		tool.NewPatch(workspace),
 		tool.NewWebFetch(),
+		tool.NewWebSearch(),
+		tool.NewSessionSearch(st),
 	}
 	if memStore != nil {
 		tools = append(tools, tool.NewMemory(memStore))
@@ -151,25 +156,29 @@ func chatCmd(args []string) error {
 
 	mc := pcfg.ModelConfig(model)
 	r := &agent.Runner{
-		Provider:      prov,
-		Tools:         tool.NewRegistry(),
-		Store:         st,
-		Model:         model,
-		AuxModel:      auxModel,
-		Cwd:           workspace,
-		MaxIters:      cfg.Agent.MaxIterations,
-		MaxTokens:     mc.MaxOutput,
-		PriceIn:       mc.PriceIn,
-		PriceOut:      mc.PriceOut,
-		ContextWindow: mc.Context,
-		AutoCompact:   cfg.Agent.AutoCompaction(),
-		Threshold:     cfg.Agent.Threshold(),
-		PromptPrefix:  cfg.Agent.SystemPromptPrefix,
-		ApprovalCfg:   cfg.Approval,
-		Memory:        memStore,
-		Skills:        skillReg,
-		Approve:       cli.Approver(os.Stdin, os.Stdout),
-		Out:           os.Stdout,
+		Provider:           prov,
+		Tools:              tool.NewRegistry(),
+		Store:              st,
+		Model:              model,
+		AuxModel:           auxModel,
+		Cwd:                workspace,
+		MaxIters:           cfg.Agent.MaxIterations,
+		MaxTokens:          mc.MaxOutput,
+		PriceIn:            mc.PriceIn,
+		PriceOut:           mc.PriceOut,
+		ContextWindow:      mc.Context,
+		AutoCompact:        cfg.Agent.AutoCompaction(),
+		DisableAutoCompact: !cfg.Agent.AutoCompaction(),
+		Threshold:          cfg.Agent.Threshold(),
+		TurnTimeout:        time.Duration(cfg.Agent.MaxTurnTimeout),
+		Limits:             cfg.Limits,
+		PromptPrefix:       cfg.Agent.SystemPromptPrefix,
+		ApprovalCfg:        cfg.Approval,
+		Fallbacks:          buildFallbacks(cfg),
+		Memory:             memStore,
+		Skills:             skillReg,
+		Approve:            cli.Approver(os.Stdin, os.Stdout),
+		Out:                os.Stdout,
 	}
 	for _, t := range tools {
 		if cfg.Tools.IsEnabled(t.Name()) {

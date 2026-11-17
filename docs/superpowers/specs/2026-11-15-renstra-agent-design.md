@@ -1,8 +1,8 @@
 # RENSTRA Agent — Desain
 
-Tanggal: 2026-11-15
-Status: menunggu persetujuan
-Revisi: 3 (paritas Hermes: scope memory/skills, biaya, `--global`)
+Tanggal: 2026-11-15 (disinkronkan 2026-11-18)
+Status: Diimplementasikan (v1.0 — 2026-11-18)
+Revisi: 4 (sinkronisasi kode aktual v1.0)
 
 ## 1. Intent
 
@@ -63,11 +63,11 @@ Paling cepat untuk fitur learning-loop. Tradeoff: dua runtime, dua toolchain, du
 ### 7.1 Layout
 
 ```
-cmd/renstra/main.go            # setup, serve, chat, config, model, skill, mcp, cron, usage
-internal/config/               # config.go, paths.go, setup.go
-internal/agent/                # runner.go, loop.go, prompt.go, compress.go, budget.go, capability.go
-internal/provider/             # provider.go (interface + registry), custom.go
-internal/provider/openai/      # diimplementasikan
+cmd/renstra/                   # main.go, commands.go, setup.go (setup, serve, chat, model, skill, mcp, usage, config)
+internal/config/               # config.go
+internal/agent/                # runner.go, prompt.go, compress.go, summarize.go, fallback.go
+internal/provider/             # provider.go (interface), retry.go
+internal/provider/openai/      # diimplementasikan (termasuk custom OpenAI-compatible)
 internal/provider/anthropic/   # diimplementasikan
 internal/provider/openrouter/  # stub
 internal/provider/groq/        # stub
@@ -75,11 +75,14 @@ internal/provider/google/      # stub
 internal/provider/ollama/      # stub
 internal/provider/mistral/     # stub
 internal/provider/xai/         # stub
-internal/tool/                 # registry.go, terminal.go, file.go, webfetch.go, memory.go, skill.go, cron.go, delegate.go
-internal/mcp/                  # client.go (stdio + http), inject.go
-internal/store/                # sqlite.go, schema.sql, messages.go, jobs.go, usage.go
-internal/telegram/             # bot.go, stream.go, render.go, approve.go, dedup.go
-internal/cli/                  # repl.go, render.go
+internal/tool/                 # tool.go, terminal.go, file.go, webfetch.go, websearch.go, session_search.go, agent_tools.go, cron.go, delegate.go
+internal/memory/               # memory.go (MEMORY.md, USER.md)
+internal/skill/                # skill.go (4 lapis + Reload)
+internal/cron/                 # cron.go
+internal/mcp/                  # client.go (stdio)
+internal/store/                # store.go, schema.sql, messages.go, helpers.go
+internal/telegram/             # bot.go, message.go (long polling, dedup, StreamWriter, DownloadFile, AskApproval)
+internal/cli/                  # repl.go, approve.go
 ```
 
 Stub provider: folder ada, constructor mengembalikan `ErrNotImplemented`, `renstra model list` menampilkannya sebagai belum tersedia. Tujuannya supaya daftar provider terlihat sejak awal dan menambah implementasi nanti tidak mengubah struktur.
@@ -87,18 +90,24 @@ Stub provider: folder ada, constructor mengembalikan `ErrNotImplemented`, `renst
 ### 7.2 Layout data (paritas Hermes)
 
 ```
-$RENSTRA_HOME/                  # default: ~/.renstra (Linux/macOS), %APPDATA%\renstra (Windows)
+$RENSTRA_HOME/                  # default: ~/.config/renstra (Linux), ~/Library/Application Support/renstra (macOS), %APPDATA%\renstra (Windows)
   config.yaml                   # 0600
+  mcp.yaml                      # konfigurasi MCP server milik instance (opsional)
   state.db                      # SQLite
-  MEMORY.md                     # catatan agent, 2.200 char
-  USER.md                       # profil user, 1.375 char
+  memory/
+    MEMORY.md                   # catatan agent, 2.200 char
+    USER.md                     # profil user, 1.375 char
   skills/                       # skills milik instance (boleh ditulis agent)
   workspace/                    # cwd untuk `terminal` dan tool file
-  logs/
+    .skills/                    # skills lokal proyek (read-only)
+    skills/                     # skills lokal proyek (read-only)
+    inbox/                      # file & foto kiriman user dari Telegram
+    .tool-output/               # hasil tool yang dipotong (> 30 KB)
 
-<global>/                       # Linux/macOS: ~/.config/renstra/global
+<global>/                       # Linux: ~/.config/renstra/global
                                 # Windows: %APPDATA%\renstra\global
   skills/                       # skills yang dipakai semua profil
+  mcp.yaml                      # MCP server global (opsional)
 ```
 
 - Satu instance melayani banyak `allowed_users`, tetapi **memory, workspace, dan skills dibagi**. Sama seperti Hermes: identitas yang dipisah adalah profil, bukan user Telegram.
@@ -168,20 +177,21 @@ aliases:
 
 Registry: map nama → `Tool{Name, Description, Schema, Handler, Danger}`.
 
-v1: `terminal`, `read_file`, `write_file`, `patch`, `web_fetch`, `memory`, `skill`, `cron`, `delegate`.
+v1: `terminal`, `read_file`, `write_file`, `patch`, `web_fetch`, `web_search`, `session_search`, `memory`, `skill`, `cron`, `delegate`.
 Tool MCP di-inject sebagai `mcp__<server>__<tool>` dengan **Danger default = butuh approval**.
 
 Output tool dipotong di 30 KB (UTF-8 aman, tidak memotong di tengah rune). Sisanya ditulis ke `$RENSTRA_HOME/workspace/.tool-output/<turn>-<n>.txt` dan hasil tool berisi path-nya.
 
-Approval: `Danger >= threshold` → approver. Telegram: inline keyboard, timeout 120 detik, default tolak. CLI: `y/N`. Ditolak → hasil tool berisi error, loop lanjut.
+Approval: `Danger >= threshold` → evaluasi aturan config (`ApprovalConfig`: `mode`, `always_denied`, `always_allowed`), lalu fallback ke approver interaktif. Telegram: inline keyboard (timeout 120 detik, default tolak, pesan tombol otomatis diedit menjadi status keputusan). CLI: `y/N`. Ditolak → hasil tool berisi error, loop lanjut. Pada job cron unattended (`WithUnattended`), perintah berbahaya yang butuh prompt interaktif langsung ditolak.
 
 ### 7.6 Skills (paritas Hermes)
 
 Satu direktori per lapis, urutan prioritas dari atas:
 
-1. `$RENSTRA_HOME/skills/` — milik instance, ditulis agent bila `allow_self_skills: true`.
-2. `<global>/skills/` — dipakai semua profil di mesin ini; ditulis hanya bila `--global` dan `allow_self_skills: true`.
-3. `skills.extra_dirs` di config — selalu read-only.
+1. `$RENSTRA_HOME/workspace/.skills/` — skill lokal proyek (read-only).
+2. `$RENSTRA_HOME/workspace/skills/` — skill lokal proyek (read-only).
+3. `$RENSTRA_HOME/skills/` — milik instance, ditulis agent melalui tool `skill` bila aktif.
+4. `<global>/skills/` — dipakai semua profil di mesin ini; ditulis CLI dengan `--global`.
 
 Nama bentrok: lapis atas menang; benturan dicatat di log.
 
@@ -192,7 +202,7 @@ Nama bentrok: lapis atas menang; benturan dicatat di log.
 
 ### 7.7 Memory (paritas Hermes)
 
-- `$RENSTRA_HOME/MEMORY.md` (2.200 char) dan `USER.md` (1.375 char).
+- `$RENSTRA_HOME/memory/MEMORY.md` (2.200 char) dan `$RENSTRA_HOME/memory/USER.md` (1.375 char).
 - Snapshot dibekukan saat sesi mulai; perubahan berlaku sesi berikutnya (menjaga prefix cache). `/new` membekukan ulang.
 - Overflow → tool `memory` mengembalikan error, agent merapikan sendiri. Tidak ada pemotongan diam-diam.
 - Penulisan hanya lewat tool `memory` + pengingat murah tiap 12 turn (satu baris tambahan di pesan sistem turn itu, tanpa panggilan LLM tambahan).
@@ -226,13 +236,13 @@ kv(key, value)
 
 ### 7.10 Telegram
 
-- DM saja. Di grup, bot membalas sekali "DM saya" lalu diam.
-- Long polling + dedup `update_id` sebelum memproses.
-- Satu turn aktif per chat. Pesan baru saat turn jalan = **interrupt** turn lama, lalu mulai turn baru (perilaku Hermes). Cron untuk chat sibuk menunggu.
-- Streaming: kirim placeholder, edit tiap ~1 detik atau 800 karakter; pecah jadi beberapa pesan bila > 4.096 karakter.
-- Perintah: `/new`, `/stop`, `/model`, `/skills`, `/usage`, `/insights`, `/cron`, `/help`.
-- Dokumen/foto disimpan ke workspace; agent menerima path. PDF/docx dibaca lewat `terminal` (`pdftotext`, `unzip`) di v1; tool `read_document` di v1.1.
-- Rate limit: hormati `429 retry_after`, antrean kirim per chat.
+- DM saja. Di grup, bot membalas sekali "DM saya langsung" lalu diam.
+- Long polling + dedup `update_id` sebelum memproses (`updates_seen` SQLite).
+- Satu turn aktif per chat. Pesan baru saat turn jalan = **interrupt** turn lama, lalu mulai turn baru (perilaku Hermes). Cron untuk chat sibuk menunggu melalui `Runner.lockChat`.
+- Streaming & progres: kirim `typing` chat action berkala, live edit via `StreamWriter` (dibatasi ~1 detik, menampilkan status `⏳ Menjalankan <tool>...`), serta pecah menjadi beberapa pesan bila > 4.096 rune.
+- Perintah: `/new`, `/reset`, `/stop`, `/model`, `/skills`, `/memory`, `/cron`, `/usage`, `/insights`, `/compact`, `/help`.
+- Dokumen/foto (beserta `caption`) otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/`; agent menerima path file. PDF/docx dibaca lewat `terminal` (`pdftotext`, `unzip`) di v1; multimodal image blocks & tool outbound file masuk v1.1.
+- Rate limit: hormati `429 retry_after`.
 
 ### 7.11 Biaya dan kuota (paritas Hermes)
 

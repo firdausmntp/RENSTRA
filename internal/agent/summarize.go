@@ -24,14 +24,15 @@ func (r *Runner) summarize(ctx context.Context, msgs []provider.Message) string 
 		return ""
 	}
 
+	primary := r.primaryTarget()
 	fallback := fallbackSummary(msgs)
-	if r.Provider == nil {
+	if primary.Provider == nil {
 		return fallback
 	}
 
 	model := r.AuxModel
 	if model == "" {
-		model = r.Model
+		model = primary.Model
 	}
 
 	req := provider.Request{
@@ -42,7 +43,7 @@ func (r *Runner) summarize(ctx context.Context, msgs []provider.Message) string 
 		MaxTokens: 800,
 	}
 
-	ch, err := r.Provider.Stream(ctx, req)
+	ch, err := primary.Provider.Stream(ctx, req)
 	if err != nil {
 		return fallback
 	}

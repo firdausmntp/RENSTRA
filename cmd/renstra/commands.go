@@ -1,16 +1,18 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
@@ -236,158 +238,6 @@ func usageCmd() error {
 	return nil
 }
 
-// setupCmd guides a user through creating their config.yaml.
-func setupCmd() error {
-	reader := bufio.NewReader(os.Stdin)
-	home := config.Home()
-	cfgPath := filepath.Join(home, "config.yaml")
-
-	fmt.Println("=== RENSTRA Setup Wizard ===")
-	fmt.Printf("Config akan disimpan ke: %s\n\n", cfgPath)
-
-	token := promptString(reader, "Telegram Bot Token", "")
-	providerKind := promptString(reader, "Provider kind (openai / anthropic)", "openai")
-	baseURL := promptString(reader, "Provider Base URL (kosong = bawaan provider)", "")
-	apiKeyEnv := promptString(reader, "Nama env variable untuk API key", strings.ToUpper(providerKind)+"_API_KEY")
-	defaultModel := promptString(reader, "Model default", "gpt-4o-mini")
-	allowedUserStr := promptString(reader, "Telegram User ID kamu (angka, pisahkan koma)", "")
-	approvalMode := promptString(reader, "Mode approval (prompt / auto / deny)", "prompt")
-	promptPrefix := promptString(reader, "System prompt prefix (kosong = default)", "")
-
-	if baseURL == "" {
-		if providerKind == "anthropic" {
-			baseURL = "https://api.anthropic.com"
-		} else {
-			baseURL = "https://api.openai.com/v1"
-		}
-	}
-
-	var allowedUsers []int64
-	for _, part := range strings.Split(allowedUserStr, ",") {
-		part = strings.TrimSpace(part)
-		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
-			allowedUsers = append(allowedUsers, id)
-		}
-	}
-
-	_ = os.MkdirAll(home, 0o700)
-
-	var b strings.Builder
-	b.WriteString("# RENSTRA configuration\n")
-	b.WriteString("# Edit file ini untuk menyesuaikan perilaku agent.\n\n")
-
-	b.WriteString("default_model: " + yamlQuote("utama:"+defaultModel) + "\n\n")
-
-	b.WriteString("providers:\n")
-	b.WriteString("  utama:\n")
-	fmt.Fprintf(&b, "    kind: %s\n", yamlQuote(providerKind))
-	fmt.Fprintf(&b, "    base_url: %s\n", yamlQuote(baseURL))
-	fmt.Fprintf(&b, "    api_key_env: %s\n", yamlQuote(apiKeyEnv))
-	fmt.Fprintf(&b, "    default_model: %s\n", yamlQuote(defaultModel))
-	b.WriteString("    # path: /chat/completions     # override endpoint bila perlu\n")
-	b.WriteString("    # proxy: \"http://127.0.0.1:8080\"\n")
-	b.WriteString("    # headers:\n")
-	b.WriteString("    #   X-Custom-Header: value\n")
-	b.WriteString("    # models:\n")
-	b.WriteString("    #   " + defaultModel + ":\n")
-	b.WriteString("    #     context: 128000\n")
-	b.WriteString("    #     max_output: 4096\n")
-	b.WriteString("    #     price_in: 0.15\n")
-	b.WriteString("    #     price_out: 0.60\n\n")
-
-	b.WriteString("aliases: {}\n\n")
-
-	b.WriteString("# --- Approval ---\n")
-	b.WriteString("# mode: prompt = tanya lewat inline keyboard, auto = izinkan semua,\n")
-	b.WriteString("#       deny = tolak semua tool berbahaya\n")
-	b.WriteString("approval:\n")
-	fmt.Fprintf(&b, "  mode: %s\n", yamlQuote(approvalMode))
-	b.WriteString("  timeout: 120s\n")
-	b.WriteString("  # always_allowed:            # bypass prompt untuk perintah spesifik\n")
-	b.WriteString("  #   - \"terminal:git status\"\n")
-	b.WriteString("  #   - \"write_file\"\n")
-	b.WriteString("  # always_denied:             # blokir perintah spesifik\n")
-	b.WriteString("  #   - \"terminal:rm -rf\"\n\n")
-
-	b.WriteString("# --- Telegram ---\n")
-	b.WriteString("telegram:\n")
-	fmt.Fprintf(&b, "  token: %s\n", yamlQuote(token))
-	b.WriteString("  allowed_users:\n")
-	if len(allowedUsers) == 0 {
-		b.WriteString("    []   # WARNING: kosong = tolak semua orang\n")
-	} else {
-		for _, id := range allowedUsers {
-			fmt.Fprintf(&b, "    - %d\n", id)
-		}
-	}
-	b.WriteString("  poll_timeout: 30s\n\n")
-
-	b.WriteString("# --- Agent ---\n")
-	b.WriteString("agent:\n")
-	if promptPrefix != "" {
-		fmt.Fprintf(&b, "  system_prompt_prefix: %s\n", yamlQuote(promptPrefix))
-	} else {
-		b.WriteString("  # system_prompt_prefix: \"kamu asisten pribadi yang ringkas dan langsung\"\n")
-	}
-	b.WriteString("  max_iterations: 40\n")
-	b.WriteString("  max_turn_timeout: 15m\n")
-	b.WriteString("  # aux_model: \"utama:gpt-4o-mini\"   # model untuk kompaksi (default = model utama)\n")
-	b.WriteString("  auto_compact: true\n")
-	b.WriteString("  compact_threshold: 0.7\n\n")
-
-	b.WriteString("# --- Tools ---\n")
-	b.WriteString("# Set false untuk mematikan tool tertentu.\n")
-	b.WriteString("tools:\n")
-	b.WriteString("  terminal: true\n")
-	b.WriteString("  read_file: true\n")
-	b.WriteString("  write_file: true\n")
-	b.WriteString("  patch: true\n")
-	b.WriteString("  web_fetch: true\n")
-	b.WriteString("  memory: true\n")
-	b.WriteString("  skill: true\n")
-	b.WriteString("  cron: true\n")
-	b.WriteString("  delegate: true\n\n")
-
-	b.WriteString("# --- Limits (0 = nonaktif, hanya peringatan) ---\n")
-	b.WriteString("limits:\n")
-	b.WriteString("  warn_daily_usd: 1.0\n")
-	b.WriteString("  max_daily_usd: 0\n")
-	b.WriteString("  max_daily_tokens: 0\n")
-
-	if err := os.WriteFile(cfgPath, []byte(b.String()), 0o600); err != nil {
-		return err
-	}
-
-	fmt.Printf("\nConfig berhasil dibuat! (%s)\n", cfgPath)
-	fmt.Printf("Jangan lupa set env: %s\n", apiKeyEnv)
-	fmt.Println("Jalankan `renstra serve` untuk menyalakan bot Telegram.")
-	return nil
-}
-
-// yamlQuote renders a string as a YAML double-quoted scalar so a token that
-// contains ':' or '#' cannot break the file.
-func yamlQuote(s string) string {
-	raw, err := yaml.Marshal(s)
-	if err != nil {
-		return `""`
-	}
-	return strings.TrimSpace(string(raw))
-}
-
-func promptString(r *bufio.Reader, prompt, def string) string {
-	if def != "" {
-		fmt.Printf("%s [%s]: ", prompt, def)
-	} else {
-		fmt.Printf("%s: ", prompt)
-	}
-	line, _ := r.ReadString('\n')
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return def
-	}
-	return line
-}
-
 // serveCmd runs the Telegram gateway + cron runner concurrently.
 func serveCmd() error {
 	cfg, err := config.Load()
@@ -420,6 +270,9 @@ func serveCmd() error {
 		pollTimeout = 30 * time.Second
 	}
 
+	workspace := filepath.Join(home, "workspace")
+	_ = os.MkdirAll(workspace, 0o755)
+
 	// Seed bot with recently seen updates so a restart never answers twice.
 	_ = st.PruneUpdatesSeen(ctx)
 	recentIDs, _ := st.RecentUpdateIDs(ctx, 500)
@@ -427,6 +280,7 @@ func serveCmd() error {
 		Token:        token,
 		AllowedUsers: allowedUsers,
 		PollTimeout:  pollTimeout,
+		WorkspaceDir: workspace,
 		OnSeen: func(id int64) {
 			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer scancel()
@@ -441,9 +295,6 @@ func serveCmd() error {
 	}
 
 	// Prepare provider, tools, memory, skills
-	workspace := filepath.Join(home, "workspace")
-	_ = os.MkdirAll(workspace, 0o755)
-
 	pcfg, model, err := config.Resolve(cfg.DefaultModel, cfg)
 	if err != nil {
 		return err
@@ -458,6 +309,8 @@ func serveCmd() error {
 		return err
 	}
 	skillReg, err := skill.Load(
+		skill.Layer{Dir: filepath.Join(workspace, ".skills"), Writable: false},
+		skill.Layer{Dir: filepath.Join(workspace, "skills"), Writable: false},
 		skill.Layer{Dir: filepath.Join(home, "skills"), Writable: true},
 		skill.Layer{Dir: filepath.Join(globalBaseDir(), "skills"), Writable: false},
 	)
@@ -472,23 +325,27 @@ func serveCmd() error {
 	}
 
 	runner := &agent.Runner{
-		Provider:      prov,
-		Tools:         tool.NewRegistry(),
-		Store:         st,
-		Model:         model,
-		AuxModel:      auxModel,
-		Cwd:           workspace,
-		MaxIters:      cfg.Agent.MaxIterations,
-		MaxTokens:     mc.MaxOutput,
-		PriceIn:       mc.PriceIn,
-		PriceOut:      mc.PriceOut,
-		ContextWindow: mc.Context,
-		AutoCompact:   cfg.Agent.AutoCompaction(),
-		Threshold:     cfg.Agent.Threshold(),
-		PromptPrefix:  cfg.Agent.SystemPromptPrefix,
-		ApprovalCfg:   cfg.Approval,
-		Memory:        memStore,
-		Skills:        skillReg,
+		Provider:           prov,
+		Tools:              tool.NewRegistry(),
+		Store:              st,
+		Model:              model,
+		AuxModel:           auxModel,
+		Cwd:                workspace,
+		MaxIters:           cfg.Agent.MaxIterations,
+		MaxTokens:          mc.MaxOutput,
+		PriceIn:            mc.PriceIn,
+		PriceOut:           mc.PriceOut,
+		ContextWindow:      mc.Context,
+		AutoCompact:        cfg.Agent.AutoCompaction(),
+		DisableAutoCompact: !cfg.Agent.AutoCompaction(),
+		Threshold:          cfg.Agent.Threshold(),
+		TurnTimeout:        time.Duration(cfg.Agent.MaxTurnTimeout),
+		Limits:             cfg.Limits,
+		PromptPrefix:       cfg.Agent.SystemPromptPrefix,
+		ApprovalCfg:        cfg.Approval,
+		Fallbacks:          buildFallbacks(cfg),
+		Memory:             memStore,
+		Skills:             skillReg,
 	}
 
 	candidates := []tool.Tool{
@@ -497,10 +354,12 @@ func serveCmd() error {
 		tool.NewWriteFile(workspace),
 		tool.NewPatch(workspace),
 		tool.NewWebFetch(),
+		tool.NewWebSearch(),
 		tool.NewMemory(memStore),
 		tool.NewSkill(skillReg),
 		tool.NewCron(st, 0),
 		tool.NewDelegate(runner, 0),
+		tool.NewSessionSearch(st),
 	}
 	for _, t := range candidates {
 		if cfg.Tools.IsEnabled(t.Name()) {
@@ -529,7 +388,21 @@ func serveCmd() error {
 		bot:             bot,
 		runner:          runner,
 		store:           st,
+		cfg:             cfg,
 		approvalTimeout: approvalWait,
+	}
+	runner.Approve = func(actx context.Context, name string, args json.RawMessage) (bool, error) {
+		cid := tool.ChatIDFrom(actx)
+		if cid <= 0 {
+			return false, nil
+		}
+		return handler.Approve(actx, cid, name, string(args))
+	}
+
+	if interruptedChats, err := st.RecoverInterruptedTurns(ctx); err == nil {
+		for _, cid := range interruptedChats {
+			_ = bot.SendMessage(ctx, cid, "ℹ️ Bot baru saja dimulai ulang. Proses yang sedang berjalan sebelumnya terhenti.")
+		}
 	}
 
 	// Cron runner in background with panic recovery
@@ -545,7 +418,7 @@ func serveCmd() error {
 					_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d panic]: %v", job.ID, r))
 				}
 			}()
-			ans, err := runner.Run(cctx, job.ChatID, job.Prompt)
+			ans, err := runner.Run(agent.WithUnattended(cctx), job.ChatID, job.Prompt)
 			if err != nil {
 				_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d error]: %v", job.ID, err))
 				return
@@ -562,6 +435,7 @@ type telegramHandler struct {
 	bot             *telegram.Bot
 	runner          *agent.Runner
 	store           *store.Store
+	cfg             *config.Config
 	approvalTimeout time.Duration
 }
 
@@ -573,7 +447,294 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			reply, err = "", fmt.Errorf("panic internal: %v", r)
 		}
 	}()
+
+	trimmed := strings.TrimSpace(text)
+	cmd := ""
+	arg := ""
+	if strings.HasPrefix(trimmed, "/") {
+		parts := strings.SplitN(trimmed, " ", 2)
+		cmd = strings.ToLower(parts[0])
+		if at := strings.Index(cmd, "@"); at != -1 {
+			cmd = cmd[:at]
+		}
+		if len(parts) > 1 {
+			arg = strings.TrimSpace(parts[1])
+		}
+	}
+
+	switch cmd {
+	case "/new", "/reset":
+		if err := h.store.SessionBreak(ctx, chatID); err != nil {
+			return "", fmt.Errorf("gagal reset sesi: %w", err)
+		}
+		h.runner.InvalidatePrompt()
+		return "Sesi baru dimulai. Catatan memori di-freeze ulang dan riwayat diputus.", nil
+
+	case "/usage":
+		today := time.Now().Format("2006-01-02")
+		u, err := h.store.UsageForDay(ctx, today)
+		if err != nil {
+			return "", fmt.Errorf("gagal membaca kuota: %w", err)
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Penggunaan Hari Ini (%s):\n- Token Masuk: %d\n- Token Keluar: %d\n- Estimasi Biaya: $%.4f USD",
+			today, u.TokensIn, u.TokensOut, u.CostUSD)
+		if h.cfg != nil {
+			if h.cfg.Limits.WarnDailyUSD > 0 {
+				fmt.Fprintf(&b, "\n- Batas Peringatan: $%.2f USD/hari", h.cfg.Limits.WarnDailyUSD)
+			}
+			if h.cfg.Limits.MaxDailyUSD > 0 {
+				fmt.Fprintf(&b, "\n- Batas Maks Biaya: $%.2f USD/hari", h.cfg.Limits.MaxDailyUSD)
+			}
+			if h.cfg.Limits.MaxDailyTokens > 0 {
+				fmt.Fprintf(&b, "\n- Batas Maks Token: %d token/hari", h.cfg.Limits.MaxDailyTokens)
+			}
+		}
+		return b.String(), nil
+
+	case "/insights":
+		now := time.Now()
+		today := now.Format("2006-01-02")
+		dayU, err := h.store.UsageForDay(ctx, today)
+		if err != nil {
+			return "", fmt.Errorf("gagal membaca insights harian: %w", err)
+		}
+		weekU, err := h.store.UsageSince(ctx, now.AddDate(0, 0, -7))
+		if err != nil {
+			return "", fmt.Errorf("gagal membaca insights mingguan: %w", err)
+		}
+		monthU, err := h.store.UsageSince(ctx, now.AddDate(0, 0, -30))
+		if err != nil {
+			return "", fmt.Errorf("gagal membaca insights bulanan: %w", err)
+		}
+		return fmt.Sprintf("Insights Pemakaian:\n\nHari ini (%s):\n- In: %d | Out: %d | Biaya: $%.4f\n\n7 hari terakhir:\n- In: %d | Out: %d | Biaya: $%.4f\n\n30 hari terakhir:\n- In: %d | Out: %d | Biaya: $%.4f",
+			today,
+			dayU.TokensIn, dayU.TokensOut, dayU.CostUSD,
+			weekU.TokensIn, weekU.TokensOut, weekU.CostUSD,
+			monthU.TokensIn, monthU.TokensOut, monthU.CostUSD), nil
+
+	case "/compact":
+		summary, err := h.runner.ForceCompact(ctx, chatID)
+		if err != nil {
+			return "", fmt.Errorf("gagal kompaksi: %w", err)
+		}
+		return fmt.Sprintf("Kompaksi selesai.\nRingkasan konteks:\n%s", summary), nil
+
+	case "/model":
+		if arg == "" {
+			var b strings.Builder
+			fmt.Fprintf(&b, "Model aktif saat ini: %s\n", h.runner.GetModel())
+			if h.cfg != nil && len(h.cfg.Providers) > 0 {
+				b.WriteString("\nProvider & model terkonfigurasi:\n")
+				pnames := make([]string, 0, len(h.cfg.Providers))
+				for n := range h.cfg.Providers {
+					pnames = append(pnames, n)
+				}
+				sort.Strings(pnames)
+				for _, pn := range pnames {
+					pc := h.cfg.Providers[pn]
+					fmt.Fprintf(&b, "- %s (%s): default=%s", pn, pc.Kind, pc.DefaultModel)
+					if len(pc.Models) > 0 {
+						mnames := make([]string, 0, len(pc.Models))
+						for mn := range pc.Models {
+							mnames = append(mnames, mn)
+						}
+						sort.Strings(mnames)
+						fmt.Fprintf(&b, " [%s]", strings.Join(mnames, ", "))
+					}
+					b.WriteString("\n")
+				}
+			}
+			if h.cfg != nil && len(h.cfg.Aliases) > 0 {
+				b.WriteString("\nAlias:\n")
+				anames := make([]string, 0, len(h.cfg.Aliases))
+				for a := range h.cfg.Aliases {
+					anames = append(anames, a)
+				}
+				sort.Strings(anames)
+				for _, a := range anames {
+					fmt.Fprintf(&b, "- %s -> %s\n", a, h.cfg.Aliases[a])
+				}
+			}
+			b.WriteString("\nGunakan `/model <nama>` atau `/model <provider>:<model>` untuk mengganti model.")
+			return strings.TrimRight(b.String(), "\n"), nil
+		}
+		if h.cfg != nil && len(h.cfg.Providers) > 0 {
+			pcfg, model, err := config.Resolve(arg, h.cfg)
+			if err != nil {
+				return "", fmt.Errorf("gagal memilih model %q: %w", arg, err)
+			}
+			prov, err := buildProvider(pcfg)
+			if err != nil {
+				return "", fmt.Errorf("gagal inisialisasi provider untuk %q: %w", arg, err)
+			}
+			mc := pcfg.ModelConfig(model)
+			h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+			if arg != model {
+				return fmt.Sprintf("Model aktif diganti ke: %s (%s)", model, arg), nil
+			}
+			return fmt.Sprintf("Model aktif diganti ke: %s", model), nil
+		}
+		h.runner.SetModel(nil, arg, 0, 0, 0, 0)
+		return fmt.Sprintf("Model aktif diganti ke: %s", arg), nil
+
+	case "/skills":
+		if h.runner.Skills == nil {
+			return "Skill registry tidak aktif.", nil
+		}
+		reloaded := false
+		if strings.EqualFold(arg, "reload") {
+			h.runner.InvalidatePrompt()
+			reloaded = true
+		}
+		idx := strings.TrimSpace(h.runner.Skills.Index())
+		var b strings.Builder
+		if reloaded {
+			b.WriteString("Skill dimuat ulang dari disk.\n")
+		}
+		if idx == "" {
+			b.WriteString("(belum ada skill terdaftar)")
+		} else {
+			b.WriteString("Skills terdaftar:\n")
+			b.WriteString(idx)
+		}
+		if conflicts := h.runner.Skills.Conflicts(); len(conflicts) > 0 {
+			b.WriteString("\n\nKonflik nama (lapis atas menang):\n")
+			for _, c := range conflicts {
+				fmt.Fprintf(&b, "- %s: %s (menutupi %s)\n", c.Name, c.WinnerDir, c.ShadowedDir)
+			}
+		}
+		return strings.TrimRight(b.String(), "\n"), nil
+
+	case "/memory":
+		if h.runner.Memory == nil {
+			return "Memory store tidak aktif.", nil
+		}
+		snap := h.runner.Memory.Snapshot()
+		memLim, userLim := h.runner.Memory.Limits()
+		memText := strings.TrimSpace(snap.Memory)
+		if memText == "" {
+			memText = "(kosong)"
+		}
+		userText := strings.TrimSpace(snap.User)
+		if userText == "" {
+			userText = "(kosong)"
+		}
+		return fmt.Sprintf("MEMORY (%d/%d char):\n%s\n\nUSER PROFILE (%d/%d char):\n%s",
+			utf8.RuneCountInString(snap.Memory), memLim, memText,
+			utf8.RuneCountInString(snap.User), userLim, userText), nil
+
+	case "/cron":
+		return h.handleCronCmd(ctx, chatID, arg)
+	}
+
+	if h.bot != nil {
+		sw := telegram.NewStreamWriter(h.bot, chatID)
+		ctx = agent.WithStreamWriter(ctx, sw)
+		ctx = agent.WithToolHook(ctx, sw.OnTool)
+		reply, err = h.runner.Run(ctx, chatID, text)
+		if err == nil && sw.Finalize(ctx, reply) {
+			return "", nil
+		}
+		return reply, err
+	}
+
 	return h.runner.Run(ctx, chatID, text)
+}
+
+func (h *telegramHandler) handleCronCmd(ctx context.Context, chatID int64, arg string) (string, error) {
+	sub := "list"
+	rest := ""
+	if arg != "" {
+		parts := strings.SplitN(arg, " ", 2)
+		sub = strings.ToLower(parts[0])
+		if len(parts) > 1 {
+			rest = strings.TrimSpace(parts[1])
+		}
+	}
+
+	switch sub {
+	case "list":
+		jobs, err := h.store.ListJobs(ctx, chatID)
+		if err != nil {
+			return "", err
+		}
+		if len(jobs) == 0 {
+			return "(tidak ada jadwal cron aktif)", nil
+		}
+		var b strings.Builder
+		b.WriteString("Daftar jadwal cron:\n")
+		for _, j := range jobs {
+			status := "aktif"
+			if !j.Enabled {
+				status = "nonaktif"
+			}
+			fmt.Fprintf(&b, "- ID %d [%s]: %s -> %q (next: %s)\n", j.ID, status, j.Schedule, j.Prompt, j.NextRunAt)
+		}
+		return strings.TrimRight(b.String(), "\n"), nil
+
+	case "add":
+		parts := strings.SplitN(rest, "|", 2)
+		if len(parts) != 2 {
+			return "Format: `/cron add <schedule> | <prompt>`\nContoh: `/cron add 0 9 * * * | ringkas berita`", nil
+		}
+		sched := strings.TrimSpace(parts[0])
+		prompt := strings.TrimSpace(parts[1])
+		if sched == "" || prompt == "" {
+			return "Format: `/cron add <schedule> | <prompt>`\nSchedule dan prompt tidak boleh kosong.", nil
+		}
+		next, err := cron.NextAfter(sched, time.Now(), time.Local)
+		if err != nil {
+			return "", fmt.Errorf("jadwal cron tidak valid: %w", err)
+		}
+		id, err := h.store.AddJob(ctx, chatID, sched, prompt)
+		if err != nil {
+			return "", err
+		}
+		_ = h.store.UpdateJobRun(ctx, id, next.Format(time.RFC3339), "")
+		return fmt.Sprintf("Jadwal cron ditambahkan (ID %d): `%s`\nBerikutnya: %s", id, sched, next.Format(time.RFC3339)), nil
+
+	case "rm", "remove":
+		id, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+		if err != nil || id <= 0 {
+			return "Pemakaian: `/cron rm <id>`", nil
+		}
+		if err := h.store.RemoveJob(ctx, id); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Jadwal ID %d berhasil dihapus.", id), nil
+
+	case "toggle", "pause":
+		id, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64)
+		if err != nil || id <= 0 {
+			return "Pemakaian: `/cron toggle <id>`", nil
+		}
+		jobs, err := h.store.ListJobs(ctx, chatID)
+		if err != nil {
+			return "", err
+		}
+		var target *store.Job
+		for i := range jobs {
+			if jobs[i].ID == id {
+				target = &jobs[i]
+				break
+			}
+		}
+		if target == nil {
+			return "", fmt.Errorf("jadwal ID %d tidak ditemukan", id)
+		}
+		newState := !target.Enabled
+		if err := h.store.SetJobEnabled(ctx, id, newState); err != nil {
+			return "", err
+		}
+		if newState {
+			return fmt.Sprintf("Jadwal ID %d diaktifkan.", id), nil
+		}
+		return fmt.Sprintf("Jadwal ID %d dinonaktifkan.", id), nil
+
+	default:
+		return "Subcommand cron: `/cron list`, `/cron add <schedule> | <prompt>`, `/cron toggle <id>`, `/cron rm <id>`", nil
+	}
 }
 
 func (h *telegramHandler) Approve(ctx context.Context, chatID int64, toolName, args string) (bool, error) {
@@ -597,4 +758,30 @@ func buildProvider(pcfg config.ProviderConfig) (provider.Provider, error) {
 	default:
 		return nil, fmt.Errorf("provider kind %q belum diaktifkan", pcfg.Kind)
 	}
+}
+
+func buildFallbacks(cfg *config.Config) []agent.FallbackTarget {
+	var targets []agent.FallbackTarget
+	for _, ref := range cfg.Fallbacks {
+		pcfg, model, err := config.Resolve(ref, cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "peringatan fallback %q tidak valid: %v\n", ref, err)
+			continue
+		}
+		prov, err := buildProvider(pcfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "peringatan build provider fallback %q: %v\n", ref, err)
+			continue
+		}
+		mc := pcfg.ModelConfig(model)
+		targets = append(targets, agent.FallbackTarget{
+			Provider:      prov,
+			Model:         model,
+			MaxTokens:     mc.MaxOutput,
+			PriceIn:       mc.PriceIn,
+			PriceOut:      mc.PriceOut,
+			ContextWindow: mc.Context,
+		})
+	}
+	return targets
 }

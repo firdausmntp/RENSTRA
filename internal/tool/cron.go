@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
+	"renstra/internal/cron"
 	"renstra/internal/store"
 )
 
@@ -66,10 +68,15 @@ func (t *Cron) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 		if in.Schedule == "" || in.Prompt == "" {
 			return "", fmt.Errorf("schedule dan prompt wajib diisi untuk add")
 		}
+		next, err := cron.NextAfter(in.Schedule, time.Now(), time.Local)
+		if err != nil {
+			return "", fmt.Errorf("jadwal cron tidak valid: %w", err)
+		}
 		id, err := t.store.AddJob(ctx, chatID, in.Schedule, in.Prompt)
 		if err != nil {
 			return "", err
 		}
+		_ = t.store.UpdateJobRun(ctx, id, next.Format(time.RFC3339), "")
 		return fmt.Sprintf("jadwal berhasil ditambahkan dengan ID %d (%s)", id, in.Schedule), nil
 
 	case "remove":
@@ -85,7 +92,7 @@ func (t *Cron) Execute(ctx context.Context, raw json.RawMessage) (string, error)
 		if in.ID == 0 {
 			return "", fmt.Errorf("id wajib diisi untuk toggle")
 		}
-		jobs, err := t.store.ListJobs(ctx, t.chatID)
+		jobs, err := t.store.ListJobs(ctx, chatID)
 		if err != nil {
 			return "", err
 		}

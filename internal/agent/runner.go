@@ -25,31 +25,106 @@ const (
 	saveTimeout     = 3 * time.Second
 )
 
+type streamWriterKey struct{}
+type toolHookKey struct{}
+type unattendedKey struct{}
+
+// WithStreamWriter attaches a per-turn writer for streaming delta text.
+func WithStreamWriter(ctx context.Context, w io.Writer) context.Context {
+	return context.WithValue(ctx, streamWriterKey{}, w)
+}
+
+func streamWriterFrom(ctx context.Context) io.Writer {
+	w, _ := ctx.Value(streamWriterKey{}).(io.Writer)
+	return w
+}
+
+// WithToolHook attaches a per-turn callback invoked before a tool executes.
+func WithToolHook(ctx context.Context, fn func(toolName, args string)) context.Context {
+	return context.WithValue(ctx, toolHookKey{}, fn)
+}
+
+func toolHookFrom(ctx context.Context) func(string, string) {
+	fn, _ := ctx.Value(toolHookKey{}).(func(string, string))
+	return fn
+}
+
+// WithUnattended marks a context as unattended (e.g. cron job), causing
+// dangerous tools that require interactive approval to be denied immediately.
+func WithUnattended(ctx context.Context) context.Context {
+	return context.WithValue(ctx, unattendedKey{}, true)
+}
+
+func isUnattended(ctx context.Context) bool {
+	v, _ := ctx.Value(unattendedKey{}).(bool)
+	return v
+}
+
 type Runner struct {
-	Provider      provider.Provider
-	Tools         *tool.Registry
-	Store         *store.Store
-	Model         string
-	Cwd           string
-	MaxIters      int
-	MaxTokens     int
-	Memory        *memory.Store
-	Skills        *skill.Registry
-	Approve       func(ctx context.Context, name string, args json.RawMessage) (bool, error)
-	Out           io.Writer
-	PriceIn       float64 // USD per 1M tokens
-	PriceOut      float64 // USD per 1M tokens
-	ContextWindow int     // Model context tokens; defaults to 32000
-	AuxModel      string  // Model used to summarize during compaction; defaults to Model
-	AutoCompact   bool    // Whether to auto-compact when nearing context window
-	Threshold     float64 // Compaction trigger threshold; defaults to 0.7
-	PromptPrefix  string  // Custom system prompt prefix
-	ApprovalCfg   config.ApprovalConfig
-	SubagentCall  func(ctx context.Context, task string) (string, error)
+	Provider           provider.Provider
+	Tools              *tool.Registry
+	Store              *store.Store
+	Model              string
+	Cwd                string
+	MaxIters           int
+	MaxTokens          int
+	Memory             *memory.Store
+	Skills             *skill.Registry
+	Approve            func(ctx context.Context, name string, args json.RawMessage) (bool, error)
+	Out                io.Writer
+	PriceIn            float64 // USD per 1M tokens
+	PriceOut           float64 // USD per 1M tokens
+	ContextWindow      int     // Model context tokens; defaults to 32000
+	AuxModel           string  // Model used to summarize during compaction; defaults to Model
+	AutoCompact        bool    // Whether to auto-compact when nearing context window
+	DisableAutoCompact bool    // Explicitly disables auto-compaction when true
+	Threshold          float64 // Compaction trigger threshold; defaults to 0.7
+	TurnTimeout        time.Duration
+	Limits             config.Limits
+	PromptPrefix       string // Custom system prompt prefix
+	ApprovalCfg        config.ApprovalConfig
+	Fallbacks          []FallbackTarget
+	SubagentCall       func(ctx context.Context, task string) (string, error)
 
 	mu           sync.Mutex
 	cachedPrompt string
 	chatLocks    map[int64]*sync.Mutex
+}
+
+// SetModel updates the active model (and provider capabilities if prov is non-nil)
+// safely across concurrent turns and clears the cached system prompt.
+func (r *Runner) SetModel(prov provider.Provider, model string, maxTokens, contextWin int, priceIn, priceOut float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Model = model
+	if prov != nil {
+		r.Provider = prov
+		r.MaxTokens = maxTokens
+		r.ContextWindow = contextWin
+		r.PriceIn = priceIn
+		r.PriceOut = priceOut
+	}
+	r.cachedPrompt = ""
+}
+
+// GetModel returns the active model name safely.
+func (r *Runner) GetModel() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Model
+}
+
+func (r *Runner) primaryTarget() FallbackTarget {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return FallbackTarget{
+		Provider:      r.Provider,
+		Model:         r.Model,
+		MaxTokens:     r.MaxTokens,
+		PriceIn:       r.PriceIn,
+		PriceOut:      r.PriceOut,
+		ContextWindow: r.ContextWindow,
+	}
 }
 
 // lockChat serializes turns per chat. The Telegram gateway already interrupts
@@ -72,9 +147,28 @@ func (r *Runner) lockChat(chatID int64) func() {
 }
 
 // Run executes one user turn.
-func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string, error) {
+func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resText string, resErr error) {
 	unlock := r.lockChat(chatID)
 	defer unlock()
+
+	if r.TurnTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.TurnTimeout)
+		defer cancel()
+	}
+
+	today := time.Now().Format("2006-01-02")
+	if r.Limits.MaxDailyUSD > 0 || r.Limits.MaxDailyTokens > 0 {
+		if u, err := r.Store.UsageForDay(ctx, today); err == nil {
+			if r.Limits.MaxDailyUSD > 0 && u.CostUSD >= r.Limits.MaxDailyUSD {
+				return "", fmt.Errorf("batas biaya harian tercapai ($%.4f / $%.2f)", u.CostUSD, r.Limits.MaxDailyUSD)
+			}
+			totalTok := u.TokensIn + u.TokensOut
+			if r.Limits.MaxDailyTokens > 0 && totalTok >= r.Limits.MaxDailyTokens {
+				return "", fmt.Errorf("batas token harian tercapai (%d / %d token)", totalTok, r.Limits.MaxDailyTokens)
+			}
+		}
+	}
 
 	history, err := r.Store.Messages(ctx, chatID)
 	if err != nil {
@@ -86,17 +180,51 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 	}
 	history = append(history, user)
 
+	var turnID int64
+	if chatID > 0 && chatID < 1_000_000_000_000_000 {
+		turnID, _ = r.Store.StartTurn(ctx, chatID)
+	}
+	defer func() {
+		if turnID <= 0 {
+			return
+		}
+		status := "done"
+		errMsg := ""
+		if resErr != nil {
+			errMsg = resErr.Error()
+			if ctx.Err() != nil {
+				status = "interrupted"
+			} else {
+				status = "error"
+			}
+		}
+		fctx, fcancel := context.WithTimeout(context.Background(), saveTimeout)
+		defer fcancel()
+		_ = r.Store.FinishTurn(fctx, turnID, status, errMsg)
+	}()
+
+	userCount := 0
+	for _, m := range history {
+		if m.Role == provider.RoleUser {
+			userCount++
+		}
+	}
+
 	maxIters := r.MaxIters
 	if maxIters <= 0 {
 		maxIters = defaultMaxIters
 	}
 
+	var lastSig string
+	var repeatCount int
+
 	for i := 0; i < maxIters; i++ {
-		win := r.ContextWindow
+		primary := r.primaryTarget()
+		win := primary.ContextWindow
 		if win <= 0 {
 			win = 32000
 		}
-		if ShouldCompact(history, win, r.threshold()) {
+		if !r.DisableAutoCompact && ShouldCompact(history, win, r.threshold()) {
 			summary := r.summarize(ctx, history)
 			if compacted, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err == nil && len(compacted) > 0 {
 				history = compacted
@@ -105,67 +233,52 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 			}
 		}
 
-		req := provider.Request{
-			Model:     r.Model,
-			Messages:  append([]provider.Message{{Role: provider.RoleSystem, Content: r.system()}}, history...),
-			Tools:     r.Tools.Defs(),
-			MaxTokens: r.MaxTokens,
+		sysPrompt := r.system()
+		if i == 0 && userCount > 0 && userCount%12 == 0 && r.Memory != nil {
+			sysPrompt += "\n[pengingat sistem: jika ada fakta penting baru tentang user atau keputusan jangka panjang, perbarui tool memory; jika ada prosedur baru, simpan ke tool skill]"
 		}
 
-		ch, err := r.Provider.Stream(ctx, req)
+		res, err := r.streamWithFallback(ctx, sysPrompt, history)
 		if err != nil {
 			return "", err
 		}
 
-		var text strings.Builder
-		var calls []provider.ToolCall
-		var streamErr error
-		var usage *provider.Usage
-
-		for ev := range ch {
-			if ev.Err != nil && streamErr == nil {
-				streamErr = ev.Err
-			}
-			if ev.Usage != nil {
-				usage = ev.Usage
-			}
-			if ev.Text != "" {
-				text.WriteString(ev.Text)
-				if r.Out != nil {
-					io.WriteString(r.Out, ev.Text)
-				}
-			}
-			if len(ev.ToolCalls) > 0 {
-				calls = ev.ToolCalls
-			}
-		}
+		text := res.text
+		calls := res.calls
+		streamErr := res.streamErr
+		usage := res.usage
 
 		// A turn cancelled mid-stream may still have partial text on the board.
 		// That partial text must be saved so the conversation history reflects
 		// what the user actually saw, but we always return the cancel error.
 		if ctx.Err() != nil {
-			r.savePartial(chatID, text.String())
-			return text.String(), ctx.Err()
+			r.savePartial(chatID, text)
+			return text, ctx.Err()
 		}
 		if streamErr != nil {
-			if text.Len() > 0 {
-				r.savePartial(chatID, text.String())
+			if text != "" {
+				r.savePartial(chatID, text)
 			}
-			return text.String(), streamErr
+			return text, streamErr
 		}
 
-		assistant := provider.Message{Role: provider.RoleAssistant, Content: text.String(), ToolCalls: calls}
+		assistant := provider.Message{Role: provider.RoleAssistant, Content: text, ToolCalls: calls}
 		if _, err := r.Store.AppendMessage(ctx, chatID, assistant); err != nil {
 			return "", err
 		}
 		history = append(history, assistant)
 
 		if usage != nil {
-			r.recordUsage(usage)
+			r.recordUsageWithPrices(usage, res.priceIn, res.priceOut)
 		}
 
 		if len(calls) == 0 {
-			return text.String(), nil
+			if r.Limits.WarnDailyUSD > 0 {
+				if u, uerr := r.Store.UsageForDay(ctx, today); uerr == nil && u.CostUSD >= r.Limits.WarnDailyUSD {
+					text += fmt.Sprintf("\n\n⚠️ Peringatan biaya: penggunaan hari ini $%.4f telah melewati batas peringatan ($%.2f).", u.CostUSD, r.Limits.WarnDailyUSD)
+				}
+			}
+			return text, nil
 		}
 
 		// Execute tools. If the context is cancelled during execution, every
@@ -174,10 +287,25 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 		for idx, call := range calls {
 			if ctx.Err() != nil {
 				r.fillCancelledTools(chatID, calls[idx:])
-				return text.String(), ctx.Err()
+				return text, ctx.Err()
 			}
-			toolCtx := tool.WithChatID(ctx, chatID)
-			result := r.executeTool(toolCtx, call)
+			sig := call.Name + ":" + strings.TrimSpace(call.Arguments)
+			if sig == lastSig {
+				repeatCount++
+			} else {
+				lastSig = sig
+				repeatCount = 1
+			}
+			var result string
+			if repeatCount >= 3 {
+				result = "[loop terdeteksi: tool " + call.Name + " dengan argumen identik sudah dipanggil 3 kali berturut-turut. Hentikan pengulangan dan berikan jawaban akhir atau gunakan cara lain.]"
+			} else {
+				toolCtx := ctx
+				if tool.ChatIDFrom(toolCtx) == 0 {
+					toolCtx = tool.WithChatID(toolCtx, chatID)
+				}
+				result = r.executeTool(toolCtx, call)
+			}
 			msg := provider.Message{Role: provider.RoleTool, Content: result, ToolCallID: call.ID}
 			if _, err := r.appendWithFallback(ctx, chatID, msg); err != nil {
 				return "", err
@@ -186,6 +314,25 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (string
 		}
 	}
 	return "", fmt.Errorf("batas iterasi (%d) tercapai tanpa jawaban akhir", maxIters)
+}
+
+// ForceCompact forces a history summarization and compaction for the given chatID.
+func (r *Runner) ForceCompact(ctx context.Context, chatID int64) (string, error) {
+	unlock := r.lockChat(chatID)
+	defer unlock()
+
+	history, err := r.Store.Messages(ctx, chatID)
+	if err != nil {
+		return "", err
+	}
+	if len(history) <= keepTurns {
+		return "pesan belum cukup banyak untuk dikompaksi", nil
+	}
+	summary := r.summarize(ctx, history)
+	if _, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err != nil {
+		return "", err
+	}
+	return summary, nil
 }
 
 func (r *Runner) threshold() float64 {
@@ -209,6 +356,9 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 	if !json.Valid([]byte(call.Arguments)) {
 		return "argumen tool tidak valid: bukan JSON"
 	}
+	if hook := toolHookFrom(ctx); hook != nil {
+		hook(call.Name, call.Arguments)
+	}
 	if t.Danger() {
 		// 1. Check declarative approval rules from config first.
 		if decided, allowed := r.ApprovalCfg.Check(call.Name, []byte(call.Arguments)); decided {
@@ -217,6 +367,9 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 			}
 			// Pre-approved by config rule (e.g. mode: "auto" or always_allowed)
 		} else {
+			if isUnattended(ctx) {
+				return "ditolak: perintah berbahaya tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
+			}
 			// 2. Fall back to interactive prompt (Telegram inline keyboard / CLI y/n)
 			if r.Approve == nil {
 				return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
@@ -249,7 +402,13 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 
 // recordUsage accumulates token counts and estimated cost for today.
 func (r *Runner) recordUsage(u *provider.Usage) {
-	cost := (float64(u.InputTokens)/1e6)*r.PriceIn + (float64(u.OutputTokens)/1e6)*r.PriceOut
+	r.recordUsageWithPrices(u, r.PriceIn, r.PriceOut)
+}
+
+// recordUsageWithPrices records usage using the price of the provider that
+// actually answered, so a fallback's cheaper or pricier model is billed right.
+func (r *Runner) recordUsageWithPrices(u *provider.Usage, priceIn, priceOut float64) {
+	cost := (float64(u.InputTokens)/1e6)*priceIn + (float64(u.OutputTokens)/1e6)*priceOut
 	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
 	defer cancel()
 	_ = r.Store.RecordUsage(ctx, time.Now().Format("2006-01-02"), int64(u.InputTokens), int64(u.OutputTokens), cost)
@@ -310,6 +469,9 @@ func (r *Runner) system() string {
 }
 
 func (r *Runner) InvalidatePrompt() {
+	if r.Skills != nil {
+		_ = r.Skills.Reload()
+	}
 	r.invalidatePrompt()
 }
 
@@ -325,26 +487,29 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 	if r.SubagentCall != nil {
 		return r.SubagentCall(ctx, task)
 	}
+	primary := r.primaryTarget()
 	child := &Runner{
-		Provider:      r.Provider,
-		Tools:         r.Tools,
-		Store:         r.Store,
-		Model:         r.Model,
-		AuxModel:      r.AuxModel,
-		Cwd:           r.Cwd,
-		MaxIters:      15,
-		MaxTokens:     r.MaxTokens,
-		PriceIn:       r.PriceIn,
-		PriceOut:      r.PriceOut,
-		ContextWindow: r.ContextWindow,
-		AutoCompact:   r.AutoCompact,
-		Threshold:     r.Threshold,
-		PromptPrefix:  r.PromptPrefix,
-		ApprovalCfg:   r.ApprovalCfg,
-		Memory:        r.Memory,
-		Skills:        r.Skills,
-		Approve:       r.Approve,
-		Out:           io.Discard,
+		Provider:           primary.Provider,
+		Tools:              r.Tools,
+		Store:              r.Store,
+		Model:              primary.Model,
+		AuxModel:           r.AuxModel,
+		Cwd:                r.Cwd,
+		MaxIters:           15,
+		MaxTokens:          primary.MaxTokens,
+		PriceIn:            primary.PriceIn,
+		PriceOut:           primary.PriceOut,
+		ContextWindow:      primary.ContextWindow,
+		AutoCompact:        r.AutoCompact,
+		DisableAutoCompact: r.DisableAutoCompact,
+		Threshold:          r.Threshold,
+		PromptPrefix:       r.PromptPrefix,
+		ApprovalCfg:        r.ApprovalCfg,
+		Fallbacks:          r.Fallbacks,
+		Memory:             r.Memory,
+		Skills:             r.Skills,
+		Approve:            r.Approve,
+		Out:                io.Discard,
 	}
 	// Synthetic high chat_id to keep subagent history separate from the main chat.
 	subID := time.Now().UnixNano()

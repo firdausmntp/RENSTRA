@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"renstra/internal/agent"
+	"renstra/internal/config"
 	"renstra/internal/provider"
 	"renstra/internal/tool"
 )
@@ -169,6 +170,116 @@ func TestStoreErrorIsNotSwallowed(t *testing.T) {
 	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
 	if _, err := r.Run(context.Background(), 1, "x"); err == nil {
 		t.Fatal("want error saat store gagal")
+	}
+}
+
+type countTool struct{ count int }
+
+func (c *countTool) Name() string            { return "counter" }
+func (c *countTool) Description() string     { return "counts calls" }
+func (c *countTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (c *countTool) Danger() bool            { return false }
+func (c *countTool) Execute(context.Context, json.RawMessage) (string, error) {
+	c.count++
+	return "ok", nil
+}
+
+func TestLoopDetectionStopsRepeatedToolCalls(t *testing.T) {
+	s := newStore(t)
+	ct := &countTool{}
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "counter", Arguments: `{"x":1}`}}}},
+		{{ToolCalls: []provider.ToolCall{{ID: "c2", Name: "counter", Arguments: `{"x":1}`}}}},
+		{{ToolCalls: []provider.ToolCall{{ID: "c3", Name: "counter", Arguments: `{"x":1}`}}}},
+		{{Text: "berhenti", Done: true}},
+	}}
+	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(ct), Store: s, Model: "m", MaxIters: 6, Cwd: t.TempDir(), Out: io.Discard}
+	got, err := r.Run(context.Background(), 1, "ulang")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "berhenti" {
+		t.Fatalf("got %q", got)
+	}
+	if ct.count != 2 {
+		t.Fatalf("tool dipanggil %d kali, harus berhenti di ke-3 (max 2 eksekusi)", ct.count)
+	}
+	msgs, _ := s.Messages(context.Background(), 1)
+	foundLoop := false
+	for _, m := range msgs {
+		if m.Role == provider.RoleTool && strings.Contains(m.Content, "loop terdeteksi") {
+			foundLoop = true
+		}
+	}
+	if !foundLoop {
+		t.Fatal("pesan loop terdeteksi tidak tersimpan di hasil tool ke-3")
+	}
+}
+
+func TestDailyLimitsBlockAndWarn(t *testing.T) {
+	s := newStore(t)
+	today := time.Now().Format("2006-01-02")
+	if err := s.RecordUsage(context.Background(), today, 1000, 500, 1.25); err != nil {
+		t.Fatal(err)
+	}
+
+	// Test warning footer when WarnDailyUSD is crossed
+	fp := &fakeProvider{steps: [][]provider.Event{{{Text: "jawaban", Done: true}}}}
+	r := &agent.Runner{
+		Provider: fp,
+		Tools:    tool.NewRegistry(),
+		Store:    s,
+		Model:    "m",
+		MaxIters: 3,
+		Cwd:      t.TempDir(),
+		Out:      io.Discard,
+		Limits:   config.Limits{WarnDailyUSD: 1.0},
+	}
+	ans, err := r.Run(context.Background(), 1, "halo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ans, "Peringatan biaya") {
+		t.Fatalf("harus ada peringatan biaya, dapat %q", ans)
+	}
+
+	// Test hard cap blocks turn before provider is called
+	r.Limits.MaxDailyUSD = 1.0
+	if _, err := r.Run(context.Background(), 1, "halo lagi"); err == nil || !strings.Contains(err.Error(), "batas biaya harian") {
+		t.Fatalf("harus ditolak karena batas biaya harian, dapat %v", err)
+	}
+}
+
+func TestUnattendedContextDeniesDangerousTool(t *testing.T) {
+	s := newStore(t)
+	approverCalled := false
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "danger", Arguments: `{}`}}}},
+		{{Text: "selesai", Done: true}},
+	}}
+	r := &agent.Runner{
+		Provider: fp,
+		Tools:    tool.NewRegistry(&dangerTool{}),
+		Store:    s,
+		Model:    "m",
+		MaxIters: 4,
+		Cwd:      t.TempDir(),
+		Out:      io.Discard,
+		Approve: func(context.Context, string, json.RawMessage) (bool, error) {
+			approverCalled = true
+			return true, nil
+		},
+	}
+	ctx := agent.WithUnattended(context.Background())
+	if _, err := r.Run(ctx, 1, "cron"); err != nil {
+		t.Fatal(err)
+	}
+	if approverCalled {
+		t.Fatal("approver interaktif tidak boleh dipanggil pada konteks unattended")
+	}
+	msgs, _ := s.Messages(context.Background(), 1)
+	if !strings.Contains(msgs[2].Content, "cron") {
+		t.Fatalf("pesan penolakan harus menyebut cron/unattended, dapat %q", msgs[2].Content)
 	}
 }
 

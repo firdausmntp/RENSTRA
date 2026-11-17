@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -72,6 +74,9 @@ func (s *Store) UsageForDay(ctx context.Context, day string) (Usage, error) {
 		`SELECT tokens_in, tokens_out, cost_usd FROM usage_daily WHERE day = ?`, day).
 		Scan(&u.TokensIn, &u.TokensOut, &u.CostUSD)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Usage{}, nil
+		}
 		return Usage{}, err
 	}
 	return u, nil
@@ -148,4 +153,57 @@ func (s *Store) UpdateJobRun(ctx context.Context, id int64, nextRun, lastRun str
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE jobs SET next_run_at = ?, last_run_at = ? WHERE id = ?`, nextRun, lastRun, id)
 	return err
+}
+
+// ---- Turn tracking & restart recovery ----
+
+// StartTurn records a newly started turn in the turns table.
+func (s *Store) StartTurn(ctx context.Context, chatID int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO turns(chat_id, status) VALUES(?, 'running')`, chatID)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// FinishTurn marks a turn as done, interrupted, or error.
+func (s *Store) FinishTurn(ctx context.Context, turnID int64, status, errMsg string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE turns SET status = ?, finished_at = datetime('now'), error = ? WHERE id = ?`,
+		status, errMsg, turnID)
+	return err
+}
+
+// RecoverInterruptedTurns marks any turns left in 'running' state from a
+// previous process crash/restart as 'interrupted' and returns the affected chat IDs.
+func (s *Store) RecoverInterruptedTurns(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT chat_id FROM turns WHERE status = 'running'`)
+	if err != nil {
+		return nil, err
+	}
+	var chats []int64
+	for rows.Next() {
+		var cid int64
+		if err := rows.Scan(&cid); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		chats = append(chats, cid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	if len(chats) == 0 {
+		return nil, nil
+	}
+
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE turns SET status = 'interrupted', finished_at = datetime('now'), error = 'process restarted' WHERE status = 'running'`); err != nil {
+		return nil, err
+	}
+	return chats, nil
 }

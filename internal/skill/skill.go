@@ -48,24 +48,43 @@ type Registry struct {
 // Direktori yang tidak ada dilewati.
 func Load(layers ...Layer) (*Registry, error) {
 	r := &Registry{layers: layers, skills: map[string]Skill{}}
+	if err := r.Reload(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// Reload memindai ulang semua lapis skill di disk dan memperbarui registry.
+func (r *Registry) Reload() error {
+	skills := map[string]Skill{}
+	var conflicts []Conflict
+	r.mu.RLock()
+	layers := append([]Layer(nil), r.layers...)
+	r.mu.RUnlock()
+
 	for _, layer := range layers {
 		found, err := scan(layer.Dir)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		for _, sk := range found {
-			if prev, ok := r.skills[sk.Name]; ok {
-				r.conflicts = append(r.conflicts, Conflict{
+			if prev, ok := skills[sk.Name]; ok {
+				conflicts = append(conflicts, Conflict{
 					Name:        sk.Name,
 					WinnerDir:   prev.Dir,
 					ShadowedDir: sk.Dir,
 				})
 				continue
 			}
-			r.skills[sk.Name] = sk
+			skills[sk.Name] = sk
 		}
 	}
-	return r, nil
+
+	r.mu.Lock()
+	r.skills = skills
+	r.conflicts = conflicts
+	r.mu.Unlock()
+	return nil
 }
 
 // Get mengembalikan skill berdasarkan nama.

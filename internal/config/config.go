@@ -47,15 +47,17 @@ type TelegramConfig struct {
 }
 
 type ToolsConfig struct {
-	Terminal  *bool `yaml:"terminal"`
-	ReadFile  *bool `yaml:"read_file"`
-	WriteFile *bool `yaml:"write_file"`
-	Patch     *bool `yaml:"patch"`
-	WebFetch  *bool `yaml:"web_fetch"`
-	Memory    *bool `yaml:"memory"`
-	Skill     *bool `yaml:"skill"`
-	Cron      *bool `yaml:"cron"`
-	Delegate  *bool `yaml:"delegate"`
+	Terminal      *bool `yaml:"terminal"`
+	ReadFile      *bool `yaml:"read_file"`
+	WriteFile     *bool `yaml:"write_file"`
+	Patch         *bool `yaml:"patch"`
+	WebFetch      *bool `yaml:"web_fetch"`
+	WebSearch     *bool `yaml:"web_search"`
+	Memory        *bool `yaml:"memory"`
+	Skill         *bool `yaml:"skill"`
+	Cron          *bool `yaml:"cron"`
+	Delegate      *bool `yaml:"delegate"`
+	SessionSearch *bool `yaml:"session_search"`
 }
 
 type Agent struct {
@@ -91,6 +93,7 @@ type ProviderConfig struct {
 
 type Config struct {
 	DefaultModel string                    `yaml:"default_model"`
+	Fallbacks    []string                  `yaml:"fallbacks"`
 	Providers    map[string]ProviderConfig `yaml:"providers"`
 	Aliases      map[string]string         `yaml:"aliases"`
 	Limits       Limits                    `yaml:"limits"`
@@ -155,6 +158,10 @@ func (t ToolsConfig) IsEnabled(name string) bool {
 		v = t.Cron
 	case "delegate":
 		v = t.Delegate
+	case "web_search":
+		v = t.WebSearch
+	case "session_search":
+		v = t.SessionSearch
 	}
 	if v == nil {
 		return true

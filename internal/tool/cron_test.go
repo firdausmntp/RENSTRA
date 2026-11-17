@@ -73,3 +73,40 @@ func TestCronToolUsesContextChatID(t *testing.T) {
 		t.Fatalf("chat 42 melihat job chat lain: %q", out)
 	}
 }
+
+func TestCronToolToggleUsesContextChatIDAndValidatesSchedule(t *testing.T) {
+	st := newStore(t)
+	c := tool.NewCron(st, 0)
+	ctx := tool.WithChatID(context.Background(), 42)
+
+	if _, err := c.Execute(ctx, json.RawMessage(`{"action":"add","schedule":"invalid-cron","prompt":"x"}`)); err == nil {
+		t.Fatal("jadwal invalid harus gagal")
+	}
+
+	if _, err := c.Execute(ctx, json.RawMessage(`{"action":"add","schedule":"@hourly","prompt":"cek status"}`)); err != nil {
+		t.Fatal(err)
+	}
+	listOut, err := c.Execute(ctx, json.RawMessage(`{"action":"list"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(listOut, "(next: )") {
+		t.Fatalf("next_run_at harus langsung terisi saat add, dapat %q", listOut)
+	}
+
+	out, err := c.Execute(ctx, json.RawMessage(`{"action":"toggle","id":1}`))
+	if err != nil {
+		t.Fatalf("toggle gagal: %v", err)
+	}
+	if !strings.Contains(out, "dinonaktifkan") {
+		t.Fatalf("output toggle = %q", out)
+	}
+
+	out, err = c.Execute(ctx, json.RawMessage(`{"action":"toggle","id":1}`))
+	if err != nil {
+		t.Fatalf("toggle kedua gagal: %v", err)
+	}
+	if !strings.Contains(out, "diaktifkan") {
+		t.Fatalf("output toggle kedua = %q", out)
+	}
+}
