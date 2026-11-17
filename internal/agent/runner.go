@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,6 +91,7 @@ type Runner struct {
 	ApprovalCfg        config.ApprovalConfig
 	Fallbacks          []FallbackTarget
 	SubagentCall       func(ctx context.Context, task string) (string, error)
+	Logger             *slog.Logger
 
 	mu           sync.Mutex
 	cachedPrompt string
@@ -202,10 +204,9 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 	if chatID > 0 && chatID < 1_000_000_000_000_000 {
 		turnID, _ = r.Store.StartTurn(ctx, chatID)
 	}
+	turnStarted := time.Now()
+	var turnTokensIn, turnTokensOut, turnToolCalls int
 	defer func() {
-		if turnID <= 0 {
-			return
-		}
 		status := "done"
 		errMsg := ""
 		if resErr != nil {
@@ -215,6 +216,21 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			} else {
 				status = "error"
 			}
+		}
+		if r.Logger != nil && chatID > 0 && chatID < 1_000_000_000_000_000 {
+			r.Logger.Info("turn_finished",
+				"chat_id", chatID,
+				"model", r.GetModel(),
+				"status", status,
+				"duration_ms", time.Since(turnStarted).Milliseconds(),
+				"tokens_in", turnTokensIn,
+				"tokens_out", turnTokensOut,
+				"tool_calls", turnToolCalls,
+				"error", errMsg,
+			)
+		}
+		if turnID <= 0 {
+			return
 		}
 		fctx, fcancel := context.WithTimeout(context.Background(), saveTimeout)
 		defer fcancel()
@@ -287,8 +303,11 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		history = append(history, assistant)
 
 		if usage != nil {
+			turnTokensIn += usage.InputTokens
+			turnTokensOut += usage.OutputTokens
 			r.recordUsageWithPrices(usage, res.priceIn, res.priceOut)
 		}
+		turnToolCalls += len(calls)
 
 		if len(calls) == 0 {
 			if r.Limits.WarnDailyUSD > 0 {

@@ -314,7 +314,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		return
 	}
 
-	hasAttachment := m.Document != nil || len(m.Photo) > 0
+	hasAttachment := m.Document != nil || len(m.Photo) > 0 || m.Voice != nil || m.Audio != nil
 	if strings.TrimSpace(text) == "" && !hasAttachment {
 		return
 	}
@@ -382,6 +382,26 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Foto diterima: %s]", saved))
+		}
+		if m.Voice != nil {
+			saved, err := b.DownloadFile(turnCtx, m.Voice.FileID, inbox, "voice.ogg")
+			if err != nil {
+				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh voice note: "+err.Error())
+				return
+			}
+			notes = append(notes, fmt.Sprintf("[Voice diterima: %s (durasi: %ds, mime: %s)]", saved, m.Voice.Duration, m.Voice.MimeType))
+		}
+		if m.Audio != nil {
+			name := m.Audio.FileName
+			if name == "" {
+				name = "audio.mp3"
+			}
+			saved, err := b.DownloadFile(turnCtx, m.Audio.FileID, inbox, name)
+			if err != nil {
+				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh audio: "+err.Error())
+				return
+			}
+			notes = append(notes, fmt.Sprintf("[Audio diterima: %s (durasi: %ds, mime: %s)]", saved, m.Audio.Duration, m.Audio.MimeType))
 		}
 		prefix := strings.Join(notes, "\n")
 		if strings.TrimSpace(text) != "" {
@@ -540,6 +560,34 @@ func (b *Bot) SendChatAction(ctx context.Context, chatID int64, action string) e
 		action = "typing"
 	}
 	_, err := b.post(ctx, "sendChatAction", map[string]any{"chat_id": chatID, "action": action})
+	return err
+}
+
+// BotCommand describes one Telegram slash command shown in the chat menu.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// DefaultCommands returns the slash command menu registered by renstra serve.
+func DefaultCommands() []BotCommand {
+	return []BotCommand{
+		{Command: "help", Description: "Tampilkan bantuan perintah"},
+		{Command: "new", Description: "Mulai sesi baru (potong riwayat lama)"},
+		{Command: "stop", Description: "Hentikan tugas yang sedang berjalan"},
+		{Command: "model", Description: "Cek atau ganti model aktif"},
+		{Command: "skills", Description: "Daftar skill aktif (/skills reload)"},
+		{Command: "memory", Description: "Lihat catatan memori & profil user"},
+		{Command: "cron", Description: "Kelola jadwal otomatis"},
+		{Command: "usage", Description: "Cek token & estimasi biaya hari ini"},
+		{Command: "insights", Description: "Ringkasan pemakaian harian, 7 & 30 hari"},
+		{Command: "compact", Description: "Kompaksi ringkasan riwayat sekarang"},
+	}
+}
+
+// SetMyCommands registers the bot's slash command menu via Telegram setMyCommands.
+func (b *Bot) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
+	_, err := b.post(ctx, "setMyCommands", map[string]any{"commands": cmds})
 	return err
 }
 
@@ -870,6 +918,23 @@ type message struct {
 	Chat      chat        `json:"chat"`
 	Document  *tgDocument `json:"document"`
 	Photo     []tgPhoto   `json:"photo"`
+	Voice     *tgVoice    `json:"voice"`
+	Audio     *tgAudio    `json:"audio"`
+}
+
+type tgVoice struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
+}
+
+type tgAudio struct {
+	FileID   string `json:"file_id"`
+	Duration int    `json:"duration"`
+	FileName string `json:"file_name"`
+	MimeType string `json:"mime_type"`
+	FileSize int64  `json:"file_size"`
 }
 
 type tgDocument struct {

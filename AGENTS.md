@@ -17,50 +17,53 @@ Dokumen ini adalah referensi utama bagi developer maupun coding agent yang beker
 
 ```text
 cmd/renstra/
-  main.go          # Entrypoint CLI (setup, serve, chat, model, skill, mcp, usage, config)
-  commands.go      # serveCmd (Telegram + cron + MCP), telegramHandler, skill/mcp/usage/model subcommands
+  main.go          # Entrypoint CLI (setup, serve, chat, model, skill, mcp, usage, config, version)
+  commands.go      # serveCmd (Telegram + cron + MCP + slog), telegramHandler, skill/mcp/usage/model subcommands
   setup.go         # Wizard interaktif `renstra setup` untuk generate config.yaml
 
 internal/agent/
-  runner.go        # Core agent loop, budget/limits, turn tracking, loop detection, hooks, RunSubagent
+  runner.go        # Core agent loop, budget/limits, turn tracking, loop detection, hooks, RunSubagent (depth), Vision, slog
   prompt.go        # BuildPrompt: rakit system prompt dari prefix, rules, tools, skill index, memory
   compress.go      # EstimateTokens, ShouldCompact, CompactHistory (tanpa memutus pasangan tool_calls)
   summarize.go     # Ringkas history lama memakai AuxModel dengan fallbackSummary deterministik
-  fallback.go      # streamWithFallback: chain provider utama + fallbacks, stream delta ke Out & StreamWriter
+  fallback.go      # streamWithFallback: chain provider utama + fallbacks, prompted tools (`tools: false`), stream ke Out & StreamWriter
 
 internal/telegram/
-  bot.go           # Bot API client (long polling, dedup updates_seen, lockChat + interrupt, typing,
-                   # DownloadFile, AskApproval inline keyboard + edit keputusan, StreamWriter)
-  message.go       # SplitMessage (batas 4096 rune), command parser, callback parser, helpText
+  bot.go           # Bot API client (long polling, dedup updates_seen, lockChat + interrupt, typing, SetMyCommands,
+                   # DownloadFile + voice/audio, SendDocument/SendPhoto/SendFile, AskApproval + edit keputusan,
+                   # Bot API 10.4 sendRichMessageDraft/sendRichMessage + stopped_message_generation, StreamWriter)
+  format.go        # markdownToHTML konversi aman Markdown -> Telegram HTML
+  message.go       # SplitMessage (batas 4096 / 32768 rune), command parser, callback parser, helpText
 
 internal/provider/
-  provider.go      # Interface Provider, Message, ToolCall, ToolDef, Usage, Request, Event
+  provider.go      # Interface Provider, Message (Attachments), ToolCall, ToolDef, Usage, Request, Event
   retry.go         # Retryable (429/5xx), Backoff eksponensial + jitter, hormati Retry-After
-  openai/          # Adapter OpenAI Chat Completions & endpoint OpenAI-compatible (aktif)
-  anthropic/       # Adapter Anthropic Messages API (aktif)
-  openrouter/      # Stub siap diaktifkan (ErrNotImplemented)
-  groq/            # Stub siap diaktifkan (ErrNotImplemented)
-  google/          # Stub siap diaktifkan (ErrNotImplemented)
-  ollama/          # Stub siap diaktifkan (ErrNotImplemented)
-  mistral/         # Stub siap diaktifkan (ErrNotImplemented)
-  xai/             # Stub siap diaktifkan (ErrNotImplemented)
+  openai/          # Adapter OpenAI Chat Completions, vision image_url & endpoint OpenAI-compatible (aktif)
+  anthropic/       # Adapter Anthropic Messages API & vision base64 (aktif)
+  google/          # Adapter Google Gemini streamGenerateContent SSE & vision inlineData (aktif)
+  openrouter/      # Adapter OpenRouter (OpenAI-compatible, aktif)
+  groq/            # Adapter Groq (OpenAI-compatible, aktif)
+  ollama/          # Adapter Ollama lokal (OpenAI-compatible, aktif)
+  mistral/         # Adapter Mistral (OpenAI-compatible, aktif)
+  xai/             # Adapter xAI Grok (OpenAI-compatible, aktif)
 
 internal/tool/
-  tool.go          # Interface Tool, Registry, WithChatID/ChatIDFrom, Truncate (spill 30 KB ke .tool-output)
+  tool.go          # Interface Tool, Registry (+ Clone), WithChatID/ChatIDFrom, Truncate (spill 30 KB ke .tool-output)
   terminal.go      # Eksekusi shell (cmd /C di Windows, sh -c di Unix), cap output 64 KB, allowlist env
   file.go          # read_file, write_file (atomik), patch (unik 1x replace)
   webfetch.go      # web_fetch HTTP GET + konversi HTML ke teks polos bertanda [untrusted]
   websearch.go     # web_search DuckDuckGo HTML (zero-API-key) bertanda [untrusted]
   session_search.go# session_search query histori percakapan lama di SQLite (termasuk yang terkompaksi)
+  send_file.go     # send_file kirim berkas/foto balik ke chat Telegram
   agent_tools.go   # Tool `memory` (read|write) dan tool `skill` (list|load|save|create|update|delete)
   cron.go          # Tool `cron` (list|add|remove|toggle) dengan validasi Cron & context ChatID
-  delegate.go      # Tool `delegate` untuk mendelegasikan sub-tugas ke subagent terisolasi
+  delegate.go      # Tool `delegate` untuk mendelegasikan sub-tugas ke subagent terisolasi (depth tracked)
 
 internal/store/
   store.go         # SQLite opener (modernc.org/sqlite), WAL pragmas, SetMaxOpenConns(1), migrasi kv
   schema.sql       # Skema v1: users, chats, messages, turns, jobs, usage_daily, updates_seen, kv
   messages.go      # AppendMessage, Messages, Compact, SessionBreak, SearchMessages
-  helpers.go       # updates_seen dedup, usage_daily, jobs CRUD, StartTurn/FinishTurn/RecoverInterruptedTurns
+  helpers.go       # updates_seen dedup, usage_daily, jobs CRUD, StartTurn/FinishTurn/RecoverInterruptedTurns, SetChatModel/GetChatModel
 
 internal/skill/
   skill.go         # Registry 4 lapis SKILL.md, prioritas lapis atas, tracking konflik, Reload(), Create/Update/Delete
@@ -72,7 +75,7 @@ internal/cron/
   cron.go          # Parser cron 5-field + @hourly/@daily/@weekly, NextAfter, Run ticker tanpa backfill
 
 internal/mcp/
-  client.go        # Client MCP JSON-RPC 2.0 via stdio, handshake, inject tool mcp__<server>__<tool>
+  client.go        # Client MCP JSON-RPC 2.0 via stdio (auto-reconnect) & HTTP/SSE, handshake, inject tool mcp__<server>__<tool>
 
 internal/config/
   config.go        # Loader config.yaml, Duration, ApprovalConfig, Limits, ToolsConfig, Resolve alias/provider

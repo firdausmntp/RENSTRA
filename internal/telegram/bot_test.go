@@ -565,6 +565,33 @@ func TestStoppedMessageGenerationCancelsTurn(t *testing.T) {
 	}
 }
 
+func TestVoiceAudioAndSetMyCommands(t *testing.T) {
+	api, b := newAPI(t)
+	api.filePath = "voice/msg.ogg"
+	api.fileBytes = []byte("ogg-bytes")
+	h := &captureHandler{}
+
+	b.handleUpdate(context.Background(), h, update{
+		UpdateID: 950,
+		Message: &message{
+			MessageID: 950,
+			Chat:      chat{ID: 42, Type: "private"},
+			Voice:     &tgVoice{FileID: "v1", Duration: 4, MimeType: "audio/ogg"},
+		},
+	})
+
+	h.mu.Lock()
+	if len(h.seen) != 1 || !strings.Contains(h.seen[0], "[Voice diterima:") || !strings.Contains(h.seen[0], "4s") {
+		h.mu.Unlock()
+		t.Fatalf("voice text = %v", h.seen)
+	}
+	h.mu.Unlock()
+
+	if err := b.SetMyCommands(context.Background(), DefaultCommands()); err != nil {
+		t.Fatalf("SetMyCommands: %v", err)
+	}
+}
+
 func TestMarkdownToHTMLAndSendFile(t *testing.T) {
 	got := markdownToHTML("Halo **dunia**, cek `my_var_name` dan [repo](https://example.com)!\n```go\nfmt.Println(1 < 2)\n```")
 	for _, want := range []string{"<b>dunia</b>", "<code>my_var_name</code>", `<a href="https://example.com">repo</a>`, `<pre><code class="language-go">fmt.Println(1 &lt; 2)</code></pre>`} {

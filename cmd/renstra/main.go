@@ -17,6 +17,8 @@ import (
 	"renstra/internal/tool"
 )
 
+var version = "v1.0.0"
+
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -62,6 +64,8 @@ func main() {
 		}
 	case "config":
 		configCmd(args[1:])
+	case "version", "-v", "--version":
+		fmt.Println("renstra", version)
 	default:
 		fmt.Fprintf(os.Stderr, "perintah tidak dikenal: %s\n", args[0])
 		usage()
@@ -73,13 +77,14 @@ func usage() {
   renstra setup                      wizard konfigurasi awal (token bot, key, dll)
   renstra serve                      jalankan gateway Telegram + cron
   renstra chat [model]               sesi chat interaktif di CLI
-  renstra model list                 daftar provider aktif & stub
+  renstra model list                 daftar provider aktif
   renstra skill list [--global]      lihat skill terdaftar
   renstra skill add <n> <d> <b>      tambah skill baru
   renstra skill rm <n> [--global]    hapus skill
   renstra mcp list                   daftar server MCP terdaftar
   renstra usage                      laporan pemakaian token & biaya
-  renstra config path                lokasi direktori data (~/.renstra)`)
+  renstra config path                lokasi direktori data (~/.renstra)
+  renstra version                    tampilkan versi binary`)
 	os.Exit(2)
 }
 

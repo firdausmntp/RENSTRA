@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -323,6 +324,8 @@ func serveCmd() error {
 		auxModel = model
 	}
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	runner := &agent.Runner{
 		Provider:           prov,
 		Tools:              tool.NewRegistry(),
@@ -347,6 +350,7 @@ func serveCmd() error {
 		Fallbacks:          buildFallbacks(cfg),
 		Memory:             memStore,
 		Skills:             skillReg,
+		Logger:             logger,
 	}
 
 	candidates := []tool.Tool{
@@ -405,6 +409,9 @@ func serveCmd() error {
 		for _, cid := range interruptedChats {
 			_ = bot.SendMessage(ctx, cid, "ℹ️ Bot baru saja dimulai ulang. Proses yang sedang berjalan sebelumnya terhenti.")
 		}
+	}
+	if err := bot.SetMyCommands(ctx, telegram.DefaultCommands()); err != nil {
+		logger.Warn("telegram_set_my_commands_failed", "error", err.Error())
 	}
 
 	// Cron runner in background with panic recovery

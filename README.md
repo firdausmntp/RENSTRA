@@ -10,7 +10,7 @@
 <p align="center">
   <a href="https://github.com/firdausmntp/RENSTRA"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
-  <img src="https://img.shields.io/badge/Gateway-Telegram--First-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram-First" />
+  <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.4%20Rich%20Messages-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.4" />
   <img src="https://img.shields.io/badge/Storage-SQLite%20WAL-0F172A?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite WAL" />
 </p>
 
@@ -31,11 +31,11 @@
 
 ## Fitur Utama
 
-### Telegram-First Experience
-- **Live Streaming & Status Tool:** Balasan LLM mengalir real-time melalui edit pesan ter-throttle (`StreamWriter`) disertai status tool yang sedang berjalan (`⏳ Menjalankan ...`).
-- **Indikator Typing Otomatis:** Mengirim `sendChatAction: typing` secara berkala selama agent berpikir atau mengeksekusi perintah.
+### Telegram-First Experience (Bot API 10.4)
+- **Rich Messages & Live Draft Streaming:** Mendukung `sendRichMessageDraft` & `sendRichMessage` (hingga 32.768 karakter untuk tabel, list, blok kode, dan LaTeX) beserta tombol **Stop** bawaan Telegram (`stopped_message_generation`), dengan fallback otomatis ke `sendMessage` / `editMessageText` berformat HTML.
+- **Indikator Typing & Auto-Menu:** Mengirim `sendChatAction: typing` berkala saat agent bekerja, dan otomatis mendaftarkan menu `/` (`setMyCommands`) saat startup.
 - **Approval Inline Keyboard:** Perintah berisiko (`terminal`, tool MCP) mengirim tombol **Setuju / Tolak** di Telegram (timeout 120 detik), lalu otomatis mengedit pesan menjadi `✅ Disetujui` atau `❌ Ditolak` saat keputusan dipilih.
-- **Penerimaan Dokumen & Foto:** File dan foto (beserta `caption`) otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/` dan diteruskan ke agent.
+- **Lampiran Dua Arah (Multimodal + `send_file`):** Dokumen, foto (diteruskan sebagai gambar untuk model `vision: true`), serta `voice`/`audio` otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/`; agent juga dapat mengirim file/gambar balik ke chat lewat `send_file`.
 - **Interrupt & Anti-Dobel Tahan Restart:** Pesan baru di chat yang sibuk menginterupsi turn berjalan secara aman tanpa memutus pasangan `tool_calls` di SQLite. Dedup `updates_seen` mencegah balasan ganda setelah restart, dan turn yang terputus akibat restart diberi notifikasi otomatis.
 
 ### Self-Improving Memory & 4-Layer Skills
@@ -44,7 +44,7 @@
 
 ### Smart Context, Pencarian & Keamanan
 - **Auto-Compaction & `session_search`:** Saat pemakaian token melewati ambang konteks model (default 70%), percakapan lama diringkas memakai `aux_model` sambil menjaga grup `assistant(tool_calls)` + `tool` tetap utuh. Riwayat lama tetap dapat dicari kembali lewat `session_search`.
-- **Multi-Provider & Auto-Failover:** Mendukung OpenAI, Anthropic, dan endpoint OpenAI-compatible kustom (termasuk proxy & header kustom), lengkap dengan alias model dan rantai `fallbacks`.
+- **Multi-Provider & Auto-Failover:** Mendukung **OpenAI**, **Anthropic**, **Google Gemini**, **OpenRouter**, **Groq**, **Ollama**, **Mistral**, **xAI**, dan endpoint `custom` OpenAI-compatible (termasuk proxy & header kustom), lengkap dengan alias model, persistensi `/model` per chat, mode *prompted tools* (`tools: false`), dan rantai `fallbacks`.
 - **Guardrails & Kontrol Biaya:**
   - Aturan approval deklaratif (`mode: prompt | auto | deny`, `always_allowed`, `always_denied`).
   - Deteksi loop otomatis jika tool dan argumen identik dipanggil 3× berturut-turut.
@@ -62,15 +62,15 @@ flowchart LR
     CRON["Cron Scheduler (30s Ticker)"] --> RUN
     GW -->|"StreamWriter + ToolHook + Typing"| RUN
 
-    RUN -->|"Primary + Fallbacks"| PROV["LLM Providers (OpenAI / Anthropic / Custom)"]
+    RUN -->|"Primary + Fallbacks"| PROV["8 Providers + Custom (OpenAI / Anthropic / Gemini / dll)"]
     RUN --> STORE["SQLite Store (WAL, Single Writer)"]
     RUN --> MEM["Memory & 4-Layer Skills"]
     RUN --> TOOLS["Tools & MCP"]
 
     TOOLS --> T1["terminal / read_file / write_file / patch"]
-    TOOLS --> T2["web_search (DDG) / web_fetch"]
+    TOOLS --> T2["web_search (DDG) / web_fetch / send_file"]
     TOOLS --> T3["session_search / memory / skill / cron / delegate"]
-    TOOLS --> MCP["MCP Servers (mcp.yaml)"]
+    TOOLS --> MCP["MCP Servers (stdio + HTTP, auto-reconnect)"]
 ```
 
 ---
@@ -149,13 +149,14 @@ export OPENAI_API_KEY="sk-..."
 | `renstra setup` | Wizard interaktif untuk membuat `config.yaml` |
 | `renstra serve` | Menjalankan gateway Telegram long polling + cron scheduler + MCP |
 | `renstra chat [model]` | Sesi chat interaktif di terminal (REPL) |
-| `renstra model list` | Daftar provider aktif, stub, konfigurasi, dan alias |
+| `renstra model list` | Daftar provider aktif, konfigurasi, dan alias |
 | `renstra skill list [--global]` | Melihat skill terdaftar beserta info konflik antar lapis |
 | `renstra skill add <name> <desc> <body> [--global]` | Menambahkan skill baru |
 | `renstra skill rm <name> [--global]` | Menghapus skill dari lapis writable |
 | `renstra mcp list` | Menampilkan server MCP yang terdaftar di `mcp.yaml` |
 | `renstra usage` | Laporan pemakaian token & estimasi biaya (hari ini & 30 hari) |
 | `renstra config path` | Menampilkan direktori aktif `$RENSTRA_HOME` |
+| `renstra version` | Menampilkan versi binary |
 
 ---
 
