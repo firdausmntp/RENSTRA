@@ -79,6 +79,7 @@ func (t *Terminal) Execute(ctx context.Context, args json.RawMessage) (string, e
 	}
 	cmd.Dir = t.cwd
 	cmd.Env = t.env()
+	cmd.WaitDelay = 500 * time.Millisecond
 
 	buf := &cappedBuffer{limit: capOutput}
 	cmd.Stdout = buf

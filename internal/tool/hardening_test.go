@@ -91,7 +91,7 @@ func TestTerminalCapsOutput(t *testing.T) {
 	term := tool.NewTerminal(t.TempDir(), 10*time.Second)
 	cmd := "for /L %i in (1,1,20000) do @echo line %i"
 	if runtime.GOOS != "windows" {
-		cmd = "yes oom-test"
+		cmd = "seq 1 20000"
 	}
 	out, err := term.Execute(context.Background(), json.RawMessage(`{"cmd":"`+cmd+`"}`))
 	if err != nil {
