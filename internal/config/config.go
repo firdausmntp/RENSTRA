@@ -58,6 +58,7 @@ type ToolsConfig struct {
 	Cron          *bool `yaml:"cron"`
 	Delegate      *bool `yaml:"delegate"`
 	SessionSearch *bool `yaml:"session_search"`
+	SendFile      *bool `yaml:"send_file"`
 }
 
 type Agent struct {
@@ -162,6 +163,8 @@ func (t ToolsConfig) IsEnabled(name string) bool {
 		v = t.WebSearch
 	case "session_search":
 		v = t.SessionSearch
+	case "send_file":
+		v = t.SendFile
 	}
 	if v == nil {
 		return true

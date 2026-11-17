@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,12 +19,14 @@ import (
 )
 
 const (
-	// MaxMessageLength is the Telegram limit for one text message, in runes.
+	// MaxMessageLength is the Telegram limit for one standard text message, in runes.
 	MaxMessageLength = 4096
-	defaultAPIBase   = "https://api.telegram.org"
-	defaultPoll      = 30 * time.Second
-	approvalTimeout  = 120 * time.Second
-	maxDownloadBytes = 20 * 1024 * 1024
+	// MaxRichMessageLength is the Telegram Bot API 10.1+ limit for one rich message, in runes.
+	MaxRichMessageLength = 32768
+	defaultAPIBase       = "https://api.telegram.org"
+	defaultPoll          = 30 * time.Second
+	approvalTimeout      = 120 * time.Second
+	maxDownloadBytes     = 20 * 1024 * 1024
 )
 
 type Config struct {
@@ -59,6 +62,7 @@ type Bot struct {
 	pending     map[int64]*pendingApproval
 	approvalSeq int64
 	turnSeq     int64
+	draftSeq    int64
 }
 
 // turnHandle identifies one running turn, so a finishing turn cannot clear a
@@ -171,11 +175,19 @@ func (b *Bot) Run(ctx context.Context, h Handler) error {
 	}
 }
 
+func (b *Bot) nextDraftID() int64 {
+	b.mu.Lock()
+	b.draftSeq++
+	id := b.draftSeq
+	b.mu.Unlock()
+	return id
+}
+
 func (b *Bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 	raw, err := b.post(ctx, "getUpdates", map[string]any{
 		"offset":          offset,
 		"timeout":         int(b.pollTimeout / time.Second),
-		"allowed_updates": []string{"message", "callback_query"},
+		"allowed_updates": []string{"message", "callback_query", "stopped_message_generation"},
 	})
 	if err != nil {
 		return nil, err
@@ -216,12 +228,29 @@ func (b *Bot) handleUpdate(ctx context.Context, h Handler, u update) {
 		onSeen(u.UpdateID)
 	}
 
+	if u.StoppedMessageGeneration != nil {
+		b.handleGenerationStopped(*u.StoppedMessageGeneration)
+		return
+	}
 	if u.CallbackQuery != nil {
 		b.handleCallback(ctx, *u.CallbackQuery)
 		return
 	}
 	if u.Message != nil {
 		b.handleMessage(ctx, h, *u.Message)
+	}
+}
+
+func (b *Bot) handleGenerationStopped(ev messageGenerationStopped) {
+	if _, ok := b.allowed[ev.Chat.ID]; !ok {
+		return
+	}
+	b.mu.Lock()
+	h, ok := b.cancels[ev.Chat.ID]
+	delete(b.cancels, ev.Chat.ID)
+	b.mu.Unlock()
+	if ok && h.cancel != nil {
+		h.cancel()
 	}
 }
 
@@ -422,14 +451,79 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) error 
 	return err
 }
 
+// SendRichMessage sends a finalized Telegram Bot API 10.1+ Rich Message using
+// native Markdown blocks (up to 32,768 chars per message), falling back to
+// SendMessage if the endpoint rejects rich_message.
+func (b *Bot) SendRichMessage(ctx context.Context, chatID int64, markdown string) error {
+	if strings.TrimSpace(markdown) == "" {
+		return errors.New("telegram: teks kosong")
+	}
+	for _, chunk := range SplitMessage(markdown, MaxRichMessageLength) {
+		_, err := b.post(ctx, "sendRichMessage", map[string]any{
+			"chat_id": chatID,
+			"rich_message": map[string]any{
+				"markdown": chunk,
+			},
+		})
+		if err != nil {
+			b.reply(ctx, chatID, chunk)
+		}
+	}
+	return nil
+}
+
+// SendRichMessageDraft streams a partial Bot API 10.1-10.4 Rich Message draft
+// to a private chat. Setting canStop displays a native Stop button that emits
+// a stopped_message_generation update when pressed.
+func (b *Bot) SendRichMessageDraft(ctx context.Context, chatID, draftID int64, markdown string, canStop, keepOnStop bool) error {
+	if strings.TrimSpace(markdown) == "" {
+		return errors.New("telegram: teks kosong")
+	}
+	_, err := b.post(ctx, "sendRichMessageDraft", map[string]any{
+		"chat_id": chatID,
+		"draft_id": draftID,
+		"rich_message": map[string]any{
+			"markdown": markdown,
+		},
+		"can_stop":     canStop,
+		"keep_on_stop": keepOnStop,
+	})
+	return err
+}
+
+// SendMessageDraft streams a partial Bot API 9.3-10.4 text draft to a private chat.
+func (b *Bot) SendMessageDraft(ctx context.Context, chatID, draftID int64, text string, canStop, keepOnStop bool) error {
+	if strings.TrimSpace(text) == "" {
+		return errors.New("telegram: teks kosong")
+	}
+	_, err := b.post(ctx, "sendMessageDraft", map[string]any{
+		"chat_id":      chatID,
+		"draft_id":     draftID,
+		"text":         markdownToHTML(text),
+		"parse_mode":   "HTML",
+		"can_stop":     canStop,
+		"keep_on_stop": keepOnStop,
+	})
+	return err
+}
+
 // SendMessageReturningID sends one message and returns its Telegram message_id.
+// It formats common Markdown into Telegram HTML and falls back to plain text
+// if Telegram rejects entity parsing.
 func (b *Bot) SendMessageReturningID(ctx context.Context, chatID int64, text string) (int64, error) {
 	if strings.TrimSpace(text) == "" {
 		return 0, errors.New("telegram: teks kosong")
 	}
-	raw, err := b.post(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text})
+	raw, err := b.post(ctx, "sendMessage", map[string]any{
+		"chat_id":    chatID,
+		"text":       markdownToHTML(text),
+		"parse_mode": "HTML",
+	})
 	if err != nil {
-		return 0, err
+		raw, err = b.post(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text})
+		if err != nil {
+			return 0, err
+		}
 	}
 	var res struct {
 		MessageID int64 `json:"message_id"`
@@ -530,9 +624,105 @@ func (b *Bot) EditMessage(ctx context.Context, chatID int64, messageID int64, te
 	_, err := b.post(ctx, "editMessageText", map[string]any{
 		"chat_id":    chatID,
 		"message_id": messageID,
-		"text":       text,
+		"text":       markdownToHTML(text),
+		"parse_mode": "HTML",
 	})
+	if err != nil {
+		_, err = b.post(ctx, "editMessageText", map[string]any{
+			"chat_id":    chatID,
+			"message_id": messageID,
+			"text":       text,
+		})
+	}
 	return err
+}
+
+// SendFile sends a local file to chatID as a photo or document depending on kind/extension.
+func (b *Bot) SendFile(ctx context.Context, chatID int64, path, caption, kind string) error {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "photo":
+		return b.SendPhoto(ctx, chatID, path, caption)
+	case "document":
+		return b.SendDocument(ctx, chatID, path, caption)
+	default:
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+			return b.SendPhoto(ctx, chatID, path, caption)
+		default:
+			return b.SendDocument(ctx, chatID, path, caption)
+		}
+	}
+}
+
+// SendDocument uploads and sends a document file to a Telegram chat.
+func (b *Bot) SendDocument(ctx context.Context, chatID int64, filePath, caption string) error {
+	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
+	if strings.TrimSpace(caption) != "" {
+		fields["caption"] = caption
+	}
+	_, err := b.postMultipart(ctx, "sendDocument", fields, "document", filePath)
+	return err
+}
+
+// SendPhoto uploads and sends a photo file to a Telegram chat.
+func (b *Bot) SendPhoto(ctx context.Context, chatID int64, filePath, caption string) error {
+	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
+	if strings.TrimSpace(caption) != "" {
+		fields["caption"] = caption
+	}
+	_, err := b.postMultipart(ctx, "sendPhoto", fields, "photo", filePath)
+	return err
+}
+
+func (b *Bot) postMultipart(ctx context.Context, method string, fields map[string]string, fileField, filePath string) (json.RawMessage, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	for k, v := range fields {
+		if err := mw.WriteField(k, v); err != nil {
+			return nil, err
+		}
+	}
+	part, err := mw.CreateFormFile(fileField, filepath.Base(filePath))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, f); err != nil {
+		return nil, err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, err
+	}
+
+	endpoint := b.apiBase + "/bot" + b.token + "/" + method
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := b.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	var ar apiResponse
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		return nil, fmt.Errorf("telegram %s: respons tidak valid (HTTP %d)", method, resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 || !ar.OK {
+		return nil, fmt.Errorf("telegram %s: HTTP %d: %s", method, resp.StatusCode, ar.Description)
+	}
+	return ar.Result, nil
 }
 
 func (b *Bot) answerCallback(ctx context.Context, id string) {
@@ -661,9 +851,16 @@ func (b *Bot) post(ctx context.Context, method string, payload any) (json.RawMes
 }
 
 type update struct {
-	UpdateID      int64          `json:"update_id"`
-	Message       *message       `json:"message"`
-	CallbackQuery *callbackQuery `json:"callback_query"`
+	UpdateID                 int64                     `json:"update_id"`
+	Message                  *message                  `json:"message"`
+	CallbackQuery            *callbackQuery            `json:"callback_query"`
+	StoppedMessageGeneration *messageGenerationStopped `json:"stopped_message_generation"`
+}
+
+type messageGenerationStopped struct {
+	Chat            chat  `json:"chat"`
+	MessageThreadID int64 `json:"message_thread_id"`
+	DraftID         int64 `json:"draft_id"`
 }
 
 type message struct {
@@ -701,10 +898,12 @@ type callbackQuery struct {
 }
 
 // StreamWriter streams incremental LLM deltas and tool execution status to
-// one Telegram chat using throttled message edits.
+// one Telegram chat using Bot API 10.4 sendRichMessageDraft/sendRichMessage,
+// automatically falling back to throttled SendMessage/EditMessage if needed.
 type StreamWriter struct {
-	bot    *Bot
-	chatID int64
+	bot     *Bot
+	chatID  int64
+	draftID int64
 
 	mu       sync.Mutex
 	buf      strings.Builder
@@ -713,12 +912,18 @@ type StreamWriter struct {
 	lastSent string
 	closed   bool
 
-	sendMu sync.Mutex
-	msgID  int64
+	sendMu      sync.Mutex
+	msgID       int64
+	usedDraft   bool
+	draftFailed bool
 }
 
 func NewStreamWriter(bot *Bot, chatID int64) *StreamWriter {
-	return &StreamWriter{bot: bot, chatID: chatID}
+	var draftID int64 = 1
+	if bot != nil {
+		draftID = bot.nextDraftID()
+	}
+	return &StreamWriter{bot: bot, chatID: chatID, draftID: draftID}
 }
 
 func (s *StreamWriter) Write(p []byte) (int, error) {
@@ -771,9 +976,9 @@ func (s *StreamWriter) OnTool(name, args string) {
 	}
 }
 
-// Finalize updates the streamed message with the complete finalReply (splitting
-// into extra messages if needed). Returns true if a streamed message was
-// already sent and finalized, or false if the caller should send normally.
+// Finalize commits the final response permanently (via sendRichMessage when
+// draft streaming was used, or by editing the placeholder message). Returns true
+// if the final response was already delivered, or false if the caller should send normally.
 func (s *StreamWriter) Finalize(ctx context.Context, finalReply string) bool {
 	s.mu.Lock()
 	s.closed = true
@@ -783,7 +988,17 @@ func (s *StreamWriter) Finalize(ctx context.Context, finalReply string) bool {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 
-	if s.msgID == 0 || s.bot == nil {
+	if s.bot == nil {
+		return false
+	}
+	if s.usedDraft {
+		if strings.TrimSpace(finalReply) == "" {
+			return true
+		}
+		_ = s.bot.SendRichMessage(ctx, s.chatID, finalReply)
+		return true
+	}
+	if s.msgID == 0 {
 		return false
 	}
 	chunks := SplitMessage(finalReply, MaxMessageLength)
@@ -815,8 +1030,12 @@ func (s *StreamWriter) renderLocked() string {
 	default:
 		return ""
 	}
-	if len([]rune(combined)) > MaxMessageLength {
-		return truncate(combined, MaxMessageLength-2)
+	limit := MaxRichMessageLength
+	if s.draftFailed {
+		limit = MaxMessageLength
+	}
+	if len([]rune(combined)) > limit {
+		return truncate(combined, limit-2)
 	}
 	return combined
 }
@@ -830,6 +1049,17 @@ func (s *StreamWriter) flush(text string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	if !s.draftFailed {
+		if err := s.bot.SendRichMessageDraft(ctx, s.chatID, s.draftID, text, true, true); err == nil {
+			s.usedDraft = true
+			return
+		}
+		s.draftFailed = true
+		if len([]rune(text)) > MaxMessageLength {
+			text = truncate(text, MaxMessageLength-2)
+		}
+	}
 
 	if s.msgID == 0 {
 		id, err := s.bot.SendMessageReturningID(ctx, s.chatID, text)

@@ -170,6 +170,8 @@ func chatCmd(args []string) error {
 		AutoCompact:        cfg.Agent.AutoCompaction(),
 		DisableAutoCompact: !cfg.Agent.AutoCompaction(),
 		Threshold:          cfg.Agent.Threshold(),
+		Vision:             mc.Vision,
+		ToolsDisabled:      mc.Tools != nil && !*mc.Tools,
 		TurnTimeout:        time.Duration(cfg.Agent.MaxTurnTimeout),
 		Limits:             cfg.Limits,
 		PromptPrefix:       cfg.Agent.SystemPromptPrefix,

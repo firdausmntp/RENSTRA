@@ -54,6 +54,16 @@ func (r *Registry) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
+// Clone returns a shallow copy of the registry so a subagent can override or
+// restrict tools (such as delegate depth) without mutating the parent.
+func (r *Registry) Clone() *Registry {
+	cp := &Registry{tools: make(map[string]Tool, len(r.tools))}
+	for k, v := range r.tools {
+		cp.tools[k] = v
+	}
+	return cp
+}
+
 func (r *Registry) Defs() []provider.ToolDef {
 	names := make([]string, 0, len(r.tools))
 	for n := range r.tools {

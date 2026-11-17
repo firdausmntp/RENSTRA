@@ -1,16 +1,37 @@
 package groq
 
 import (
-	"errors"
+	"context"
 
 	"renstra/internal/config"
 	"renstra/internal/provider"
+	"renstra/internal/provider/openai"
 )
 
-var ErrNotImplemented = errors.New("provider groq belum diimplementasikan")
+const defaultBaseURL = "https://api.groq.com/openai/v1"
+
+type Client struct {
+	inner *openai.Client
+}
 
 func New(cfg config.ProviderConfig, apiKey string) (provider.Provider, error) {
-	return nil, ErrNotImplemented
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaultBaseURL
+	}
+	if cfg.Path == "" {
+		cfg.Path = "/chat/completions"
+	}
+	c, err := openai.New(cfg, apiKey)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{inner: c}, nil
 }
 
 func Name() string { return "groq" }
+
+func (c *Client) Name() string { return "groq" }
+
+func (c *Client) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	return c.inner.Stream(ctx, req)
+}

@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -48,7 +50,7 @@ func (c *Client) Name() string { return "openai" }
 
 type wireMessage struct {
 	Role       string         `json:"role"`
-	Content    string         `json:"content,omitempty"`
+	Content    any            `json:"content,omitempty"`
 	ToolCalls  []wireToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"`
 }
@@ -194,7 +196,36 @@ func send(ctx context.Context, ch chan<- provider.Event, ev provider.Event) bool
 func (c *Client) buildRequest(req provider.Request) wireRequest {
 	out := wireRequest{Model: req.Model, Stream: true, MaxTokens: req.MaxTokens, Messages: []wireMessage{}}
 	for _, m := range req.Messages {
-		wm := wireMessage{Role: string(m.Role), Content: m.Content, ToolCallID: m.ToolCallID}
+		wm := wireMessage{Role: string(m.Role), ToolCallID: m.ToolCallID}
+		if len(m.Attachments) > 0 {
+			var parts []map[string]any
+			if m.Content != "" {
+				parts = append(parts, map[string]any{"type": "text", "text": m.Content})
+			}
+			for _, att := range m.Attachments {
+				data, err := os.ReadFile(att.Path)
+				if err != nil {
+					continue
+				}
+				mime := att.MimeType
+				if mime == "" {
+					mime = "image/jpeg"
+				}
+				parts = append(parts, map[string]any{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data),
+					},
+				})
+			}
+			if len(parts) > 0 {
+				wm.Content = parts
+			} else if m.Content != "" {
+				wm.Content = m.Content
+			}
+		} else if m.Content != "" {
+			wm.Content = m.Content
+		}
 		for _, tc := range m.ToolCalls {
 			var w wireToolCall
 			w.ID = tc.ID

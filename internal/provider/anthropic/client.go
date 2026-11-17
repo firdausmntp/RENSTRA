@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -48,14 +50,21 @@ func New(cfg config.ProviderConfig, apiKey string) (*Client, error) {
 
 func (c *Client) Name() string { return "anthropic" }
 
+type wireImageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
 type wireBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Type      string           `json:"type"`
+	Text      string           `json:"text,omitempty"`
+	ID        string           `json:"id,omitempty"`
+	Name      string           `json:"name,omitempty"`
+	Input     json.RawMessage  `json:"input,omitempty"`
+	ToolUseID string           `json:"tool_use_id,omitempty"`
+	Content   string           `json:"content,omitempty"`
+	Source    *wireImageSource `json:"source,omitempty"`
 }
 
 type wireMessage struct {
@@ -222,6 +231,24 @@ func (c *Client) buildRequest(req provider.Request) wireRequest {
 			role = "assistant"
 		}
 		var blocks []wireBlock
+		for _, att := range m.Attachments {
+			data, err := os.ReadFile(att.Path)
+			if err != nil {
+				continue
+			}
+			mime := att.MimeType
+			if mime == "" {
+				mime = "image/jpeg"
+			}
+			blocks = append(blocks, wireBlock{
+				Type: "image",
+				Source: &wireImageSource{
+					Type:      "base64",
+					MediaType: mime,
+					Data:      base64.StdEncoding.EncodeToString(data),
+				},
+			})
+		}
 		if m.Content != "" {
 			blocks = append(blocks, wireBlock{Type: "text", Text: m.Content})
 		}

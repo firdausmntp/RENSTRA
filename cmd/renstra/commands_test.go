@@ -308,4 +308,8 @@ func TestSlashModelWithConfigResolvesProviderAndAlias(t *testing.T) {
 	if r.Provider == nil || r.Provider.Name() != "anthropic" {
 		t.Fatalf("provider tidak berganti ke anthropic: %v", r.Provider)
 	}
+	saved, err := st.GetChatModel(context.Background(), 24)
+	if err != nil || saved != "sonnet" {
+		t.Fatalf("model per chat tidak tersimpan di DB: got=%q err=%v", saved, err)
+	}
 }

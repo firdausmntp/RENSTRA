@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +81,9 @@ type Runner struct {
 	AutoCompact        bool    // Whether to auto-compact when nearing context window
 	DisableAutoCompact bool    // Explicitly disables auto-compaction when true
 	Threshold          float64 // Compaction trigger threshold; defaults to 0.7
+	Vision             bool    // Whether the active model accepts image inputs
+	ToolsDisabled      bool    // Whether native tool calling is unsupported (use prompted JSON tools)
+	Depth              int     // Subagent nesting depth
 	TurnTimeout        time.Duration
 	Limits             config.Limits
 	PromptPrefix       string // Custom system prompt prefix
@@ -107,6 +112,14 @@ func (r *Runner) SetModel(prov provider.Provider, model string, maxTokens, conte
 	r.cachedPrompt = ""
 }
 
+// SetCapabilities updates vision and prompted-tools flags safely.
+func (r *Runner) SetCapabilities(vision, toolsDisabled bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Vision = vision
+	r.ToolsDisabled = toolsDisabled
+}
+
 // GetModel returns the active model name safely.
 func (r *Runner) GetModel() string {
 	r.mu.Lock()
@@ -124,6 +137,8 @@ func (r *Runner) primaryTarget() FallbackTarget {
 		PriceIn:       r.PriceIn,
 		PriceOut:      r.PriceOut,
 		ContextWindow: r.ContextWindow,
+		Vision:        r.Vision,
+		ToolsDisabled: r.ToolsDisabled,
 	}
 }
 
@@ -177,6 +192,9 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 	user := provider.Message{Role: provider.RoleUser, Content: userText}
 	if _, err := r.Store.AppendMessage(ctx, chatID, user); err != nil {
 		return "", err
+	}
+	if r.primaryTarget().Vision {
+		user.Attachments = extractImageAttachments(userText)
 	}
 	history = append(history, user)
 
@@ -359,6 +377,9 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 	if hook := toolHookFrom(ctx); hook != nil {
 		hook(call.Name, call.Arguments)
 	}
+	if isUnattended(ctx) && strings.HasPrefix(call.Name, "mcp__") {
+		return "ditolak: tool MCP tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
+	}
 	if t.Danger() {
 		// 1. Check declarative approval rules from config first.
 		if decided, allowed := r.ApprovalCfg.Check(call.Name, []byte(call.Arguments)); decided {
@@ -488,9 +509,13 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		return r.SubagentCall(ctx, task)
 	}
 	primary := r.primaryTarget()
+	childTools := r.Tools
+	if r.Tools != nil {
+		childTools = r.Tools.Clone()
+	}
 	child := &Runner{
 		Provider:           primary.Provider,
-		Tools:              r.Tools,
+		Tools:              childTools,
 		Store:              r.Store,
 		Model:              primary.Model,
 		AuxModel:           r.AuxModel,
@@ -500,6 +525,9 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		PriceIn:            primary.PriceIn,
 		PriceOut:           primary.PriceOut,
 		ContextWindow:      primary.ContextWindow,
+		Vision:             primary.Vision,
+		ToolsDisabled:      primary.ToolsDisabled,
+		Depth:              r.Depth + 1,
 		AutoCompact:        r.AutoCompact,
 		DisableAutoCompact: r.DisableAutoCompact,
 		Threshold:          r.Threshold,
@@ -511,7 +539,43 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		Approve:            r.Approve,
 		Out:                io.Discard,
 	}
+	if childTools != nil {
+		if _, ok := childTools.Get("delegate"); ok {
+			childTools.Add(tool.NewDelegate(child, child.Depth))
+		}
+	}
 	// Synthetic high chat_id to keep subagent history separate from the main chat.
 	subID := time.Now().UnixNano()
 	return child.Run(ctx, subID, task)
+}
+
+func extractImageAttachments(text string) []provider.Attachment {
+	var out []provider.Attachment
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		const prefix = "[Foto diterima: "
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(line, prefix)
+		end := strings.Index(rest, "]")
+		if end <= 0 {
+			continue
+		}
+		path := strings.TrimSpace(rest[:end])
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		mime := "image/jpeg"
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".png":
+			mime = "image/png"
+		case ".webp":
+			mime = "image/webp"
+		case ".gif":
+			mime = "image/gif"
+		}
+		out = append(out, provider.Attachment{Path: path, MimeType: mime})
+	}
+	return out
 }

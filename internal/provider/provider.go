@@ -20,11 +20,17 @@ type ToolCall struct {
 	Arguments string // raw JSON
 }
 
+type Attachment struct {
+	Path     string
+	MimeType string
+}
+
 type Message struct {
-	Role       Role
-	Content    string
-	ToolCalls  []ToolCall
-	ToolCallID string
+	Role        Role
+	Content     string
+	ToolCalls   []ToolCall
+	ToolCallID  string
+	Attachments []Attachment
 }
 
 type ToolDef struct {

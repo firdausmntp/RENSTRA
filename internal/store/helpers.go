@@ -207,3 +207,28 @@ func (s *Store) RecoverInterruptedTurns(ctx context.Context) ([]int64, error) {
 	}
 	return chats, nil
 }
+
+// ---- Per-chat model persistence ----
+
+// SetChatModel saves the selected model/alias reference for a chat.
+func (s *Store) SetChatModel(ctx context.Context, chatID int64, model string) error {
+	res, err := s.db.ExecContext(ctx, `UPDATE chats SET model = ? WHERE id = ?`, model, chatID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		_, err = s.db.ExecContext(ctx, `INSERT INTO chats(id, user_id, model) VALUES(?,?,?)`, chatID, chatID, model)
+		return err
+	}
+	return nil
+}
+
+// GetChatModel returns the saved model/alias reference for a chat, or "".
+func (s *Store) GetChatModel(ctx context.Context, chatID int64) (string, error) {
+	var model string
+	err := s.db.QueryRowContext(ctx, `SELECT model FROM chats WHERE id = ?`, chatID).Scan(&model)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return model, err
+}

@@ -18,14 +18,17 @@ import (
 
 // fakeAPI emulates the Bot API subset the bot uses.
 type fakeAPI struct {
-	mu        sync.Mutex
-	sent      []string
-	payloads  []map[string]any
-	edits     []map[string]any
-	fail429   int32
-	onSend    func(map[string]any)
-	filePath  string
-	fileBytes []byte
+	mu           sync.Mutex
+	sent         []string
+	payloads     []map[string]any
+	edits        []map[string]any
+	richDrafts   []map[string]any
+	richMessages []map[string]any
+	disableRich  bool
+	fail429      int32
+	onSend       func(map[string]any)
+	filePath     string
+	fileBytes    []byte
 }
 
 func newAPI(t *testing.T) (*fakeAPI, *Bot) {
@@ -37,6 +40,32 @@ func newAPI(t *testing.T) (*fakeAPI, *Bot) {
 		json.Unmarshal(raw, &payload)
 
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/sendRichMessageDraft"):
+			api.mu.Lock()
+			disabled := api.disableRich
+			if !disabled {
+				api.richDrafts = append(api.richDrafts, payload)
+			}
+			api.mu.Unlock()
+			if disabled {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"ok":false,"description":"Not Found"}`)
+				return
+			}
+			io.WriteString(w, `{"ok":true,"result":true}`)
+		case strings.HasSuffix(r.URL.Path, "/sendRichMessage"):
+			api.mu.Lock()
+			disabled := api.disableRich
+			if !disabled {
+				api.richMessages = append(api.richMessages, payload)
+			}
+			api.mu.Unlock()
+			if disabled {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, `{"ok":false,"description":"Not Found"}`)
+				return
+			}
+			io.WriteString(w, `{"ok":true,"result":{"message_id":2}}`)
 		case strings.HasSuffix(r.URL.Path, "/sendMessage"):
 			if atomic.AddInt32(&api.fail429, -1) >= 0 {
 				w.WriteHeader(http.StatusTooManyRequests)
@@ -467,28 +496,102 @@ func TestAskApprovalEditsMessageOnDecision(t *testing.T) {
 }
 
 func TestStreamWriterEditsAndFinalizes(t *testing.T) {
+	// 1. Bot API 10.4 Rich Message Draft -> Rich Message finalize
 	api, b := newAPI(t)
 	sw := NewStreamWriter(b, 42)
-
 	if _, err := sw.Write([]byte("halo ")); err != nil {
 		t.Fatal(err)
 	}
 	sw.OnTool("terminal", `{"cmd":"pwd"}`)
-
 	if !sw.Finalize(context.Background(), "halo dunia selesai") {
+		t.Fatal("Finalize harus mengembalikan true setelah draft terkirim")
+	}
+
+	api.mu.Lock()
+	if len(api.richDrafts) == 0 {
+		api.mu.Unlock()
+		t.Fatal("expected sendRichMessageDraft calls")
+	}
+	if len(api.richMessages) != 1 {
+		api.mu.Unlock()
+		t.Fatalf("expected 1 sendRichMessage on Finalize, got %d", len(api.richMessages))
+	}
+	rm, _ := api.richMessages[0]["rich_message"].(map[string]any)
+	if fmt.Sprint(rm["markdown"]) != "halo dunia selesai" {
+		api.mu.Unlock()
+		t.Fatalf("rich_message markdown = %v", rm["markdown"])
+	}
+	api.mu.Unlock()
+
+	// 2. Fallback to legacy sendMessage + editMessageText when Rich API is unavailable
+	api2, b2 := newAPI(t)
+	api2.disableRich = true
+	sw2 := NewStreamWriter(b2, 42)
+	if _, err := sw2.Write([]byte("halo ")); err != nil {
+		t.Fatal(err)
+	}
+	if !sw2.Finalize(context.Background(), "halo dunia fallback") {
 		t.Fatal("Finalize harus mengembalikan true setelah pesan awal terkirim")
 	}
-
-	if got := api.texts(); len(got) != 1 {
+	if got := api2.texts(); len(got) != 1 {
 		t.Fatalf("expected 1 initial sendMessage, got %d (%v)", len(got), got)
 	}
-	api.mu.Lock()
-	defer api.mu.Unlock()
-	if len(api.edits) == 0 {
-		t.Fatal("expected EditMessage during Finalize")
+	api2.mu.Lock()
+	defer api2.mu.Unlock()
+	if len(api2.edits) == 0 {
+		t.Fatal("expected EditMessage during Finalize fallback")
 	}
-	lastEdit := fmt.Sprint(api.edits[len(api.edits)-1]["text"])
-	if lastEdit != "halo dunia selesai" {
-		t.Fatalf("lastEdit = %q, want 'halo dunia selesai'", lastEdit)
+	lastEdit := fmt.Sprint(api2.edits[len(api2.edits)-1]["text"])
+	if lastEdit != "halo dunia fallback" {
+		t.Fatalf("lastEdit = %q, want 'halo dunia fallback'", lastEdit)
+	}
+}
+
+func TestStoppedMessageGenerationCancelsTurn(t *testing.T) {
+	_, b := newAPI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	b.RegisterCancel(42, cancel)
+
+	b.handleUpdate(context.Background(), &fakeHandler{}, update{
+		UpdateID: 901,
+		StoppedMessageGeneration: &messageGenerationStopped{
+			Chat:    chat{ID: 42, Type: "private"},
+			DraftID: 1,
+		},
+	})
+
+	if ctx.Err() == nil {
+		t.Fatal("stopped_message_generation harus membatalkan turn yang sedang berjalan")
+	}
+}
+
+func TestMarkdownToHTMLAndSendFile(t *testing.T) {
+	got := markdownToHTML("Halo **dunia**, cek `my_var_name` dan [repo](https://example.com)!\n```go\nfmt.Println(1 < 2)\n```")
+	for _, want := range []string{"<b>dunia</b>", "<code>my_var_name</code>", `<a href="https://example.com">repo</a>`, `<pre><code class="language-go">fmt.Println(1 &lt; 2)</code></pre>`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+
+	var gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.URL.Path
+		io.WriteString(w, `{"ok":true,"result":{"message_id":99}}`)
+	}))
+	defer srv.Close()
+
+	b, err := New(Config{Token: "tok", APIBase: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(t.TempDir(), "report.png")
+	if err := os.WriteFile(tmp, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SendFile(context.Background(), 42, tmp, "ini gambar", "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(gotMethod, "/sendPhoto") {
+		t.Fatalf("expected sendPhoto for .png, got %q", gotMethod)
 	}
 }

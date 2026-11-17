@@ -127,7 +127,8 @@ func setupCmd() error {
 	b.WriteString("  skill: true\n")
 	b.WriteString("  cron: true\n")
 	b.WriteString("  delegate: true\n")
-	b.WriteString("  session_search: true\n\n")
+	b.WriteString("  session_search: true\n")
+	b.WriteString("  send_file: true\n\n")
 
 	b.WriteString("# --- Limits (0 = nonaktif, hanya peringatan) ---\n")
 	b.WriteString("limits:\n")

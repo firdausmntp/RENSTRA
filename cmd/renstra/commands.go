@@ -101,14 +101,13 @@ func modelListCmd() {
 	}
 
 	fmt.Println("Provider aktif:")
-	fmt.Println("  openai     (aktif)   - endpoint OpenAI-compatible / local")
-	fmt.Println("  anthropic  (aktif)   - Claude Messages API")
-	fmt.Println("\nProvider lain (stub, siap diaktifkan di v1.1):")
+	fmt.Println("  openai     (aktif) - endpoint OpenAI-compatible / custom")
+	fmt.Println("  anthropic  (aktif) - Claude Messages API")
 	for _, name := range []string{
 		openrouter.Name(), groq.Name(), google.Name(),
 		ollama.Name(), mistral.Name(), xai.Name(),
 	} {
-		fmt.Printf("  %-10s (stub)    - belum diimplementasikan\n", name)
+		fmt.Printf("  %-10s (aktif)\n", name)
 	}
 
 	if cfg != nil && len(cfg.Providers) > 0 {
@@ -339,6 +338,8 @@ func serveCmd() error {
 		AutoCompact:        cfg.Agent.AutoCompaction(),
 		DisableAutoCompact: !cfg.Agent.AutoCompaction(),
 		Threshold:          cfg.Agent.Threshold(),
+		Vision:             mc.Vision,
+		ToolsDisabled:      mc.Tools != nil && !*mc.Tools,
 		TurnTimeout:        time.Duration(cfg.Agent.MaxTurnTimeout),
 		Limits:             cfg.Limits,
 		PromptPrefix:       cfg.Agent.SystemPromptPrefix,
@@ -360,6 +361,7 @@ func serveCmd() error {
 		tool.NewCron(st, 0),
 		tool.NewDelegate(runner, 0),
 		tool.NewSessionSearch(st),
+		tool.NewSendFile(workspace, bot),
 	}
 	for _, t := range candidates {
 		if cfg.Tools.IsEnabled(t.Name()) {
@@ -570,12 +572,15 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			}
 			mc := pcfg.ModelConfig(model)
 			h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+			h.runner.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+			_ = h.store.SetChatModel(ctx, chatID, arg)
 			if arg != model {
 				return fmt.Sprintf("Model aktif diganti ke: %s (%s)", model, arg), nil
 			}
 			return fmt.Sprintf("Model aktif diganti ke: %s", model), nil
 		}
 		h.runner.SetModel(nil, arg, 0, 0, 0, 0)
+		_ = h.store.SetChatModel(ctx, chatID, arg)
 		return fmt.Sprintf("Model aktif diganti ke: %s", arg), nil
 
 	case "/skills":
@@ -626,6 +631,18 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 
 	case "/cron":
 		return h.handleCronCmd(ctx, chatID, arg)
+	}
+
+	if h.cfg != nil && len(h.cfg.Providers) > 0 {
+		if savedRef, merr := h.store.GetChatModel(ctx, chatID); merr == nil && savedRef != "" {
+			if pcfg, model, rerr := config.Resolve(savedRef, h.cfg); rerr == nil && model != h.runner.GetModel() {
+				if prov, perr := buildProvider(pcfg); perr == nil {
+					mc := pcfg.ModelConfig(model)
+					h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+					h.runner.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+				}
+			}
+		}
 	}
 
 	if h.bot != nil {
@@ -755,8 +772,20 @@ func buildProvider(pcfg config.ProviderConfig) (provider.Provider, error) {
 		return openai.New(pcfg, apiKey)
 	case "anthropic":
 		return anthropic.New(pcfg, apiKey)
+	case "openrouter":
+		return openrouter.New(pcfg, apiKey)
+	case "groq":
+		return groq.New(pcfg, apiKey)
+	case "ollama":
+		return ollama.New(pcfg, apiKey)
+	case "mistral":
+		return mistral.New(pcfg, apiKey)
+	case "xai":
+		return xai.New(pcfg, apiKey)
+	case "google":
+		return google.New(pcfg, apiKey)
 	default:
-		return nil, fmt.Errorf("provider kind %q belum diaktifkan", pcfg.Kind)
+		return nil, fmt.Errorf("provider kind %q tidak dikenal", pcfg.Kind)
 	}
 }
 
@@ -781,6 +810,8 @@ func buildFallbacks(cfg *config.Config) []agent.FallbackTarget {
 			PriceIn:       mc.PriceIn,
 			PriceOut:      mc.PriceOut,
 			ContextWindow: mc.Context,
+			Vision:        mc.Vision,
+			ToolsDisabled: mc.Tools != nil && !*mc.Tools,
 		})
 	}
 	return targets

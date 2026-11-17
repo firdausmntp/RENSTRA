@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -255,7 +257,7 @@ func TestToolsCallSurfacesError(t *testing.T) {
 
 func TestConnectAllCollectsErrors(t *testing.T) {
 	cfgs := []ServerConfig{
-		{Name: "bad-url", URL: "http://example.com"},
+		{Name: "bad-url", URL: "http://127.0.0.1:1"},
 		{Name: "bad-cmd", Command: ""},
 	}
 	servers, errs := ConnectAll(context.Background(), cfgs)
@@ -264,5 +266,49 @@ func TestConnectAllCollectsErrors(t *testing.T) {
 	}
 	if len(errs) != 2 {
 		t.Fatalf("errs count = %d, want 2", len(errs))
+	}
+}
+
+func TestConnectHTTPTransportAndCall(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			t.Fatalf("missing auth header")
+		}
+		raw, _ := io.ReadAll(r.Body)
+		var req rpcMessage
+		_ = json.Unmarshal(raw, &req)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Mcp-Session-Id", "sess-1")
+		switch req.Method {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(rpcMessage{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"protocolVersion":"2024-11-05","capabilities":{}}`)})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(rpcMessage{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"tools":[{"name":"ping","description":"ping server","inputSchema":{"type":"object"}}]}`)})
+		case "tools/call":
+			_ = json.NewEncoder(w).Encode(rpcMessage{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"content":[{"type":"text","text":"pong"}]}`)})
+		}
+	}))
+	defer srv.Close()
+
+	c, err := Connect(context.Background(), ServerConfig{
+		Name:    "remote",
+		URL:     srv.URL,
+		Headers: map[string]string{"Authorization": "Bearer tok"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := c.Tools()
+	if len(tools) != 1 || tools[0].Name() != "mcp__remote__ping" {
+		t.Fatalf("tools = %v", tools)
+	}
+	res, err := tools[0].Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res, "pong") {
+		t.Fatalf("res = %q", res)
 	}
 }

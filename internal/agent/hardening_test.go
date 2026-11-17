@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -281,6 +282,122 @@ func TestUnattendedContextDeniesDangerousTool(t *testing.T) {
 	if !strings.Contains(msgs[2].Content, "cron") {
 		t.Fatalf("pesan penolakan harus menyebut cron/unattended, dapat %q", msgs[2].Content)
 	}
+}
+
+type fakeMCPTool struct{}
+
+func (m *fakeMCPTool) Name() string            { return "mcp__demo__ping" }
+func (m *fakeMCPTool) Description() string     { return "mcp ping" }
+func (m *fakeMCPTool) Schema() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (m *fakeMCPTool) Danger() bool            { return false }
+func (m *fakeMCPTool) Execute(context.Context, json.RawMessage) (string, error) {
+	return "pong", nil
+}
+
+func TestUnattendedContextDeniesMCPTool(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "mcp__demo__ping", Arguments: `{}`}}}},
+		{{Text: "ok", Done: true}},
+	}}
+	r := &agent.Runner{
+		Provider: fp,
+		Tools:    tool.NewRegistry(&fakeMCPTool{}),
+		Store:    s,
+		Model:    "m",
+		MaxIters: 3,
+		Cwd:      t.TempDir(),
+		Out:      io.Discard,
+	}
+	if _, err := r.Run(agent.WithUnattended(context.Background()), 1, "cron mcp"); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := s.Messages(context.Background(), 1)
+	if !strings.Contains(msgs[2].Content, "MCP") || strings.Contains(msgs[2].Content, "pong") {
+		t.Fatalf("tool MCP harus ditolak di cron unattended, dapat %q", msgs[2].Content)
+	}
+}
+
+func TestRunSubagentPropagatesDelegateDepthLimit(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{ToolCalls: []provider.ToolCall{{ID: "d1", Name: "delegate", Arguments: `{"task":"sub1"}`}}}},
+		{{ToolCalls: []provider.ToolCall{{ID: "d2", Name: "delegate", Arguments: `{"task":"sub2"}`}}}},
+		{{ToolCalls: []provider.ToolCall{{ID: "d3", Name: "delegate", Arguments: `{"task":"sub3"}`}}}},
+		{{Text: "selesai depth2", Done: true}},
+		{{Text: "selesai depth1", Done: true}},
+		{{Text: "selesai root", Done: true}},
+	}}
+	reg := tool.NewRegistry()
+	r := &agent.Runner{Provider: fp, Tools: reg, Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
+	reg.Add(tool.NewDelegate(r, 0))
+
+	got, err := r.Run(context.Background(), 1, "mulai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "selesai root" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPromptedToolsAndVisionAttachment(t *testing.T) {
+	s := newStore(t)
+	imgPath := filepath.Join(t.TempDir(), "foto.png")
+	if err := os.WriteFile(imgPath, []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawAttachment bool
+	var sawNoNativeTools bool
+	step := 0
+	prov := &inspectProvider{fn: func(req provider.Request) []provider.Event {
+		step++
+		if step == 1 {
+			sawNoNativeTools = len(req.Tools) == 0
+			for _, m := range req.Messages {
+				if len(m.Attachments) > 0 && m.Attachments[0].Path == imgPath {
+					sawAttachment = true
+				}
+			}
+			return []provider.Event{{Text: "```json\n{\"tool_call\":{\"name\":\"counter\",\"arguments\":{}}}\n```", Done: true}}
+		}
+		return []provider.Event{{Text: "sudah dijalankan", Done: true}}
+	}}
+
+	ct := &countTool{}
+	r := &agent.Runner{
+		Provider:      prov,
+		Tools:         tool.NewRegistry(ct),
+		Store:         s,
+		Model:         "m",
+		MaxIters:      4,
+		Cwd:           t.TempDir(),
+		Out:           io.Discard,
+		Vision:        true,
+		ToolsDisabled: true,
+	}
+	got, err := r.Run(context.Background(), 1, "[Foto diterima: "+imgPath+"]\nlihat ini")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sudah dijalankan" || !sawAttachment || !sawNoNativeTools || ct.count != 1 {
+		t.Fatalf("got=%q att=%v noTools=%v count=%d", got, sawAttachment, sawNoNativeTools, ct.count)
+	}
+}
+
+type inspectProvider struct {
+	fn func(provider.Request) []provider.Event
+}
+
+func (i *inspectProvider) Name() string { return "inspect" }
+func (i *inspectProvider) Stream(_ context.Context, req provider.Request) (<-chan provider.Event, error) {
+	ch := make(chan provider.Event, 2)
+	for _, ev := range i.fn(req) {
+		ch <- ev
+	}
+	close(ch)
+	return ch, nil
 }
 
 var _ = filepath.Join

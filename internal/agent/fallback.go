@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -17,6 +18,8 @@ type FallbackTarget struct {
 	PriceIn       float64
 	PriceOut      float64
 	ContextWindow int
+	Vision        bool
+	ToolsDisabled bool
 }
 
 type streamResult struct {
@@ -48,10 +51,21 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			maxTok = primary.MaxTokens
 		}
 
+		var toolDefs []provider.ToolDef
+		effectivePrompt := sysPrompt
+		if r.Tools != nil {
+			toolDefs = r.Tools.Defs()
+		}
+		promptedMode := target.ToolsDisabled && len(toolDefs) > 0
+		if promptedMode {
+			effectivePrompt += buildPromptedToolsSection(toolDefs)
+			toolDefs = nil
+		}
+
 		req := provider.Request{
 			Model:     target.Model,
-			Messages:  append([]provider.Message{{Role: provider.RoleSystem, Content: sysPrompt}}, history...),
-			Tools:     r.Tools.Defs(),
+			Messages:  append([]provider.Message{{Role: provider.RoleSystem, Content: effectivePrompt}}, history...),
+			Tools:     toolDefs,
 			MaxTokens: maxTok,
 		}
 
@@ -77,11 +91,13 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			if ev.Text != "" {
 				hasAnyOutput = true
 				text.WriteString(ev.Text)
-				if r.Out != nil {
-					io.WriteString(r.Out, ev.Text)
-				}
-				if sw != nil {
-					io.WriteString(sw, ev.Text)
+				if !promptedMode {
+					if r.Out != nil {
+						io.WriteString(r.Out, ev.Text)
+					}
+					if sw != nil {
+						io.WriteString(sw, ev.Text)
+					}
 				}
 			}
 			if len(ev.ToolCalls) > 0 {
@@ -101,8 +117,23 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			continue
 		}
 
+		finalText := text.String()
+		if promptedMode && len(calls) == 0 && streamErr == nil {
+			if parsed, ok := parsePromptedToolCall(finalText); ok {
+				calls = []provider.ToolCall{parsed}
+				finalText = ""
+			} else if finalText != "" {
+				if r.Out != nil {
+					io.WriteString(r.Out, finalText)
+				}
+				if sw != nil {
+					io.WriteString(sw, finalText)
+				}
+			}
+		}
+
 		return streamResult{
-			text:      text.String(),
+			text:      finalText,
 			calls:     calls,
 			usage:     usage,
 			streamErr: streamErr,
@@ -112,4 +143,56 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 	}
 
 	return streamResult{}, lastErr
+}
+
+func buildPromptedToolsSection(defs []provider.ToolDef) string {
+	var b strings.Builder
+	b.WriteString("\n\nmode prompted-tools: jika perlu memanggil tool, balas HANYA dengan satu blok JSON persis seperti:\n")
+	b.WriteString("{\"tool_call\":{\"name\":\"nama_tool\",\"arguments\":{...}}}\n")
+	b.WriteString("daftar schema tool:\n")
+	for _, d := range defs {
+		fmt.Fprintf(&b, "- %s: %s (schema: %s)\n", d.Name, d.Description, string(d.Schema))
+	}
+	return b.String()
+}
+
+func parsePromptedToolCall(raw string) (provider.ToolCall, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return provider.ToolCall{}, false
+	}
+	if strings.HasPrefix(s, "```") {
+		if idx := strings.Index(s, "\n"); idx >= 0 {
+			s = s[idx+1:]
+		}
+		if end := strings.LastIndex(s, "```"); end >= 0 {
+			s = s[:end]
+		}
+		s = strings.TrimSpace(s)
+	}
+	var wrap struct {
+		ToolCall *struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"tool_call"`
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(s), &wrap); err != nil {
+		return provider.ToolCall{}, false
+	}
+	name := wrap.Name
+	args := wrap.Arguments
+	if wrap.ToolCall != nil {
+		name = wrap.ToolCall.Name
+		args = wrap.ToolCall.Arguments
+	}
+	if strings.TrimSpace(name) == "" {
+		return provider.ToolCall{}, false
+	}
+	argStr := "{}"
+	if len(args) > 0 && string(args) != "null" {
+		argStr = string(args)
+	}
+	return provider.ToolCall{ID: "prompted_1", Name: name, Arguments: argStr}, true
 }

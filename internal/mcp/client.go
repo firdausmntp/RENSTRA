@@ -2,15 +2,18 @@ package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"renstra/internal/tool"
 )
@@ -55,17 +58,21 @@ type rpcMessage struct {
 }
 
 type Client struct {
-	name string
-	cmd  *exec.Cmd
-	in   io.Writer
-	out  io.Reader
+	name       string
+	cfg        ServerConfig
+	cmd        *exec.Cmd
+	in         io.Writer
+	out        io.Reader
+	httpClient *http.Client
+	sessionID  string
 
-	writeMu sync.Mutex
-	pendMu  sync.Mutex
-	pending map[int64]chan rpcMessage
-	nextID  int64
-	closed  bool
-	dead    bool
+	reconnMu sync.Mutex
+	writeMu  sync.Mutex
+	pendMu   sync.Mutex
+	pending  map[int64]chan rpcMessage
+	nextID   int64
+	closed   bool
+	dead     bool
 
 	tools []tool.Tool
 }
@@ -87,34 +94,78 @@ func newClientWithStreams(in io.Writer, out io.Reader, name string) *Client {
 }
 
 func Connect(ctx context.Context, cfg ServerConfig) (*Client, error) {
-	if cfg.URL != "" {
-		return nil, fmt.Errorf("MCP server %q: transport http belum didukung, pakai command", cfg.Name)
+	if strings.TrimSpace(cfg.URL) != "" {
+		c := &Client{
+			name:       cfg.Name,
+			cfg:        cfg,
+			httpClient: &http.Client{Timeout: 60 * time.Second},
+			pending:    map[int64]chan rpcMessage{},
+		}
+		if err := c.handshake(ctx); err != nil {
+			return nil, fmt.Errorf("MCP server %q: %w", cfg.Name, err)
+		}
+		return c, nil
 	}
 	if strings.TrimSpace(cfg.Command) == "" {
-		return nil, fmt.Errorf("MCP server %q: command kosong", cfg.Name)
+		return nil, fmt.Errorf("MCP server %q: command dan url kosong", cfg.Name)
 	}
 
-	cmd := exec.Command(cfg.Command, cfg.Args...)
-	cmd.Env = mergeEnv(cfg.Env)
+	c := &Client{name: cfg.Name, cfg: cfg, pending: map[int64]chan rpcMessage{}}
+	if err := c.startStdio(ctx); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (c *Client) startStdio(ctx context.Context) error {
+	cmd := exec.Command(c.cfg.Command, c.cfg.Args...)
+	cmd.Env = mergeEnv(c.cfg.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
-		return nil, fmt.Errorf("MCP server %q: %w", cfg.Name, err)
+		return fmt.Errorf("MCP server %q: %w", c.cfg.Name, err)
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("MCP server %q: %w", cfg.Name, err)
+		return fmt.Errorf("MCP server %q: %w", c.cfg.Name, err)
 	}
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("MCP server %q gagal dijalankan: %w", cfg.Name, err)
+		return fmt.Errorf("MCP server %q gagal dijalankan: %w", c.cfg.Name, err)
 	}
 
-	c := newClientWithStreams(stdin, stdout, cfg.Name)
+	c.writeMu.Lock()
 	c.cmd = cmd
+	c.in = stdin
+	c.out = stdout
+	c.closed = false
+	c.writeMu.Unlock()
+
+	c.pendMu.Lock()
+	c.dead = false
+	c.pending = map[int64]chan rpcMessage{}
+	c.pendMu.Unlock()
+
+	go c.readLoop()
+
 	if err := c.handshake(ctx); err != nil {
 		c.Close()
-		return nil, fmt.Errorf("MCP server %q: %w", cfg.Name, err)
+		return fmt.Errorf("MCP server %q: %w", c.cfg.Name, err)
 	}
-	return c, nil
+	return nil
+}
+
+// Reconnect restarts a dead stdio MCP server process and re-runs handshake.
+func (c *Client) Reconnect(ctx context.Context) error {
+	c.reconnMu.Lock()
+	defer c.reconnMu.Unlock()
+
+	if !c.Dead() {
+		return nil
+	}
+	if strings.TrimSpace(c.cfg.Command) == "" {
+		return fmt.Errorf("server MCP %q telah mati dan tidak bisa di-restart", c.name)
+	}
+	_ = c.Close()
+	return c.startStdio(ctx)
 }
 
 // ConnectAll connects every server, collecting per-server errors so one broken
@@ -214,7 +265,12 @@ func (c *Client) notify(method string, params any) error {
 	if err != nil {
 		return err
 	}
-	return c.send(rpcMessage{JSONRPC: "2.0", Method: method, Params: raw})
+	msg := rpcMessage{JSONRPC: "2.0", Method: method, Params: raw}
+	if c.httpClient != nil {
+		_, err := c.postHTTP(context.Background(), msg)
+		return err
+	}
+	return c.send(msg)
 }
 
 func (c *Client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -226,6 +282,18 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 	c.pendMu.Lock()
 	c.nextID++
 	id := c.nextID
+	if c.httpClient != nil {
+		c.pendMu.Unlock()
+		msg := rpcMessage{JSONRPC: "2.0", ID: json.RawMessage(fmt.Sprintf("%d", id)), Method: method, Params: rawParams}
+		respMsg, err := c.postHTTP(ctx, msg)
+		if err != nil {
+			return nil, err
+		}
+		if respMsg.Error != nil {
+			return nil, respMsg.Error
+		}
+		return respMsg.Result, nil
+	}
 	ch := make(chan rpcMessage, 1)
 	c.pending[id] = ch
 	c.pendMu.Unlock()
@@ -252,6 +320,77 @@ func (c *Client) call(ctx context.Context, method string, params any) (json.RawM
 		}
 		return msg.Result, nil
 	}
+}
+
+func (c *Client) postHTTP(ctx context.Context, msg rpcMessage) (rpcMessage, error) {
+	body, err := json.Marshal(msg)
+	if err != nil {
+		return rpcMessage{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL, bytes.NewReader(body))
+	if err != nil {
+		return rpcMessage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	for k, v := range c.cfg.Headers {
+		req.Header.Set(k, v)
+	}
+	c.writeMu.Lock()
+	sid := c.sessionID
+	c.writeMu.Unlock()
+	if sid != "" {
+		req.Header.Set("Mcp-Session-Id", sid)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return rpcMessage{}, err
+	}
+	defer resp.Body.Close()
+
+	if newSID := resp.Header.Get("Mcp-Session-Id"); newSID != "" {
+		c.writeMu.Lock()
+		c.sessionID = newSID
+		c.writeMu.Unlock()
+	}
+
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return rpcMessage{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return rpcMessage{}, fmt.Errorf("MCP HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return rpcMessage{}, nil
+	}
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/event-stream") {
+		sc := bufio.NewScanner(bytes.NewReader(raw))
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if payload == "" {
+				continue
+			}
+			var out rpcMessage
+			if err := json.Unmarshal([]byte(payload), &out); err == nil && len(out.ID) > 0 {
+				return out, nil
+			}
+		}
+		return rpcMessage{}, errors.New("MCP HTTP SSE tidak mengembalikan respons JSON-RPC")
+	}
+
+	var out rpcMessage
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return rpcMessage{}, fmt.Errorf("MCP HTTP respons tidak valid: %w", err)
+	}
+	return out, nil
 }
 
 func (c *Client) send(msg rpcMessage) error {
@@ -325,7 +464,9 @@ func (t *mcpTool) Danger() bool            { return true }
 
 func (t *mcpTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.client.Dead() {
-		return "", fmt.Errorf("server MCP %q telah mati, perlu restart", t.client.name)
+		if err := t.client.Reconnect(ctx); err != nil {
+			return "", err
+		}
 	}
 	if len(args) == 0 || string(args) == "null" {
 		args = json.RawMessage(`{}`)
