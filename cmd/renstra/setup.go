@@ -23,20 +23,18 @@ func setupCmd() error {
 	fmt.Printf("Config akan disimpan ke: %s\n\n", cfgPath)
 
 	token := promptString(reader, "Telegram Bot Token", "")
-	providerKind := promptString(reader, "Provider kind (openai / anthropic)", "openai")
-	baseURL := promptString(reader, "Provider Base URL (kosong = bawaan provider)", "")
-	apiKeyEnv := promptString(reader, "Nama env variable untuk API key", strings.ToUpper(providerKind)+"_API_KEY")
-	defaultModel := promptString(reader, "Model default", "gpt-4o-mini")
+	providerKind := strings.ToLower(strings.TrimSpace(promptString(reader,
+		"Provider kind (openai / anthropic / google / openrouter / groq / ollama / mistral / xai)", "openai")))
+	defBase, defKeyEnv, defModel := providerDefaults(providerKind)
+	baseURL := promptString(reader, "Provider Base URL (kosong = bawaan provider)", defBase)
+	apiKeyEnv := promptString(reader, "Nama env variable untuk API key", defKeyEnv)
+	defaultModel := promptString(reader, "Model default", defModel)
 	allowedUserStr := promptString(reader, "Telegram User ID kamu (angka, pisahkan koma)", "")
 	approvalMode := promptString(reader, "Mode approval (prompt / auto / deny)", "prompt")
 	promptPrefix := promptString(reader, "System prompt prefix (kosong = default)", "")
 
 	if baseURL == "" {
-		if providerKind == "anthropic" {
-			baseURL = "https://api.anthropic.com"
-		} else {
-			baseURL = "https://api.openai.com/v1"
-		}
+		baseURL = defBase
 	}
 
 	var allowedUsers []int64
@@ -110,6 +108,7 @@ func setupCmd() error {
 	}
 	b.WriteString("  max_iterations: 40\n")
 	b.WriteString("  max_turn_timeout: 15m\n")
+	b.WriteString("  file_retention_days: 14\n")
 	b.WriteString("  # aux_model: \"utama:gpt-4o-mini\"   # model untuk kompaksi (default = model utama)\n")
 	b.WriteString("  auto_compact: true\n")
 	b.WriteString("  compact_threshold: 0.7\n\n")
@@ -154,6 +153,27 @@ func yamlQuote(s string) string {
 		return `""`
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+func providerDefaults(kind string) (baseURL, apiKeyEnv, model string) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "anthropic":
+		return "https://api.anthropic.com", "ANTHROPIC_API_KEY", "claude-3-5-sonnet-latest"
+	case "google", "gemini":
+		return "https://generativelanguage.googleapis.com", "GEMINI_API_KEY", "gemini-2.5-flash"
+	case "openrouter":
+		return "https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "openai/gpt-4o-mini"
+	case "groq":
+		return "https://api.groq.com/openai/v1", "GROQ_API_KEY", "llama-3.3-70b-versatile"
+	case "ollama":
+		return "http://localhost:11434/v1", "OLLAMA_API_KEY", "qwen2.5-coder:7b"
+	case "mistral":
+		return "https://api.mistral.ai/v1", "MISTRAL_API_KEY", "mistral-small-latest"
+	case "xai":
+		return "https://api.x.ai/v1", "XAI_API_KEY", "grok-3-mini"
+	default:
+		return "https://api.openai.com/v1", "OPENAI_API_KEY", "gpt-4o-mini"
+	}
 }
 
 func promptString(r *bufio.Reader, prompt, def string) string {

@@ -69,6 +69,15 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			MaxTokens: maxTok,
 		}
 
+		if i > 0 && r.Logger != nil {
+			r.Logger.Warn("provider_fallback",
+				"provider", target.Provider.Name(),
+				"model", target.Model,
+				"attempt", i+1,
+				"prev_error", lastErr,
+			)
+		}
+
 		ch, err := target.Provider.Stream(ctx, req)
 		if err != nil {
 			lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, err)

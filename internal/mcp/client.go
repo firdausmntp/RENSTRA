@@ -153,13 +153,20 @@ func (c *Client) startStdio(ctx context.Context) error {
 	return nil
 }
 
-// Reconnect restarts a dead stdio MCP server process and re-runs handshake.
+// Reconnect restarts a dead stdio MCP server process (or refreshes HTTP handshake)
+// and re-runs handshake to update tool metadata.
 func (c *Client) Reconnect(ctx context.Context) error {
 	c.reconnMu.Lock()
 	defer c.reconnMu.Unlock()
 
 	if !c.Dead() {
 		return nil
+	}
+	if strings.TrimSpace(c.cfg.URL) != "" {
+		c.pendMu.Lock()
+		c.dead = false
+		c.pendMu.Unlock()
+		return c.handshake(ctx)
 	}
 	if strings.TrimSpace(c.cfg.Command) == "" {
 		return fmt.Errorf("server MCP %q telah mati dan tidak bisa di-restart", c.name)
@@ -223,20 +230,37 @@ func (c *Client) handshake(ctx context.Context) error {
 		return fmt.Errorf("tools/list tidak valid: %w", err)
 	}
 
-	c.tools = make([]tool.Tool, 0, len(res.Tools))
+	existing := make(map[string]*mcpTool, len(c.tools))
+	for _, old := range c.tools {
+		if mt, ok := old.(*mcpTool); ok {
+			existing[mt.name] = mt
+		}
+	}
+
+	next := make([]tool.Tool, 0, len(res.Tools))
 	for _, t := range res.Tools {
 		schema := t.InputSchema
 		if len(schema) == 0 || string(schema) == "null" {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
-		c.tools = append(c.tools, &mcpTool{
+		fullName := "mcp__" + c.name + "__" + t.Name
+		if mt, ok := existing[fullName]; ok {
+			mt.mu.Lock()
+			mt.description = t.Description
+			mt.schema = schema
+			mt.mu.Unlock()
+			next = append(next, mt)
+			continue
+		}
+		next = append(next, &mcpTool{
 			client:      c,
-			name:        "mcp__" + c.name + "__" + t.Name,
+			name:        fullName,
 			toolName:    t.Name,
 			description: t.Description,
 			schema:      schema,
 		})
 	}
+	c.tools = next
 	return nil
 }
 
@@ -450,6 +474,7 @@ func (c *Client) readLoop() {
 }
 
 type mcpTool struct {
+	mu          sync.RWMutex
 	client      *Client
 	name        string
 	toolName    string
@@ -457,10 +482,18 @@ type mcpTool struct {
 	schema      json.RawMessage
 }
 
-func (t *mcpTool) Name() string            { return t.name }
-func (t *mcpTool) Description() string     { return t.description }
-func (t *mcpTool) Schema() json.RawMessage { return t.schema }
-func (t *mcpTool) Danger() bool            { return true }
+func (t *mcpTool) Name() string { return t.name }
+func (t *mcpTool) Description() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.description
+}
+func (t *mcpTool) Schema() json.RawMessage {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.schema
+}
+func (t *mcpTool) Danger() bool { return true }
 
 func (t *mcpTool) Execute(ctx context.Context, args json.RawMessage) (string, error) {
 	if t.client.Dead() {

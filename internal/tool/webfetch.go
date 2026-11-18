@@ -3,18 +3,27 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const webFetchLimit = 256 * 1024
 
-type WebFetch struct{ maxBytes int }
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+type WebFetch struct {
+	maxBytes     int
+	AllowPrivate bool
+}
 
 func NewWebFetch() *WebFetch { return &WebFetch{maxBytes: webFetchLimit} }
 
@@ -59,7 +68,7 @@ func (t *WebFetch) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	req.Header.Set("User-Agent", "renstra/1.0")
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := t.httpClient()
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("mengambil %s: %w", u.Redacted(), err)
@@ -89,6 +98,58 @@ func (t *WebFetch) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 	b.WriteString("\n[/untrusted]")
 	return b.String(), nil
+}
+
+func (t *WebFetch) httpClient() *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	if !t.AllowPrivate {
+		dialer.Control = func(_, address string, _ syscall.RawConn) error {
+			return checkPublicAddr(address)
+		}
+	}
+	tr := &http.Transport{
+		DialContext:           dialer.DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: tr,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("terlalu banyak redirect")
+			}
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("skema redirect tidak diizinkan: %s", req.URL.Scheme)
+			}
+			return nil
+		},
+	}
+}
+
+func checkPublicAddr(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("alamat tujuan tidak valid: %w", err)
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return fmt.Errorf("IP tujuan tidak valid: %w", err)
+	}
+	ip = ip.Unmap()
+	if !ip.IsValid() || ip.IsLoopback() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() ||
+		ip.IsUnspecified() || cgnatPrefix.Contains(ip) {
+		return fmt.Errorf("akses ke IP privat/lokal (%s) diblokir demi mencegah SSRF", ip)
+	}
+	return nil
 }
 
 var (

@@ -75,16 +75,19 @@ type Runner struct {
 	Skills             *skill.Registry
 	Approve            func(ctx context.Context, name string, args json.RawMessage) (bool, error)
 	Out                io.Writer
-	PriceIn            float64 // USD per 1M tokens
-	PriceOut           float64 // USD per 1M tokens
-	ContextWindow      int     // Model context tokens; defaults to 32000
-	AuxModel           string  // Model used to summarize during compaction; defaults to Model
-	AutoCompact        bool    // Whether to auto-compact when nearing context window
-	DisableAutoCompact bool    // Explicitly disables auto-compaction when true
-	Threshold          float64 // Compaction trigger threshold; defaults to 0.7
-	Vision             bool    // Whether the active model accepts image inputs
-	ToolsDisabled      bool    // Whether native tool calling is unsupported (use prompted JSON tools)
-	Depth              int     // Subagent nesting depth
+	PriceIn            float64           // USD per 1M tokens
+	PriceOut           float64           // USD per 1M tokens
+	ContextWindow      int               // Model context tokens; defaults to 32000
+	AuxModel           string            // Model used to summarize during compaction; defaults to Model
+	AuxProvider        provider.Provider // Optional separate provider for AuxModel
+	AuxPriceIn         float64           // USD per 1M input tokens for AuxModel
+	AuxPriceOut        float64           // USD per 1M output tokens for AuxModel
+	AutoCompact        bool              // Whether to auto-compact when nearing context window
+	DisableAutoCompact bool              // Explicitly disables auto-compaction when true
+	Threshold          float64           // Compaction trigger threshold; defaults to 0.7
+	Vision             bool              // Whether the active model accepts image inputs
+	ToolsDisabled      bool              // Whether native tool calling is unsupported (use prompted JSON tools)
+	Depth              int               // Subagent nesting depth
 	TurnTimeout        time.Duration
 	Limits             config.Limits
 	PromptPrefix       string // Custom system prompt prefix
@@ -95,7 +98,96 @@ type Runner struct {
 
 	mu           sync.Mutex
 	cachedPrompt string
-	chatLocks    map[int64]*sync.Mutex
+	locks        *chatLockRegistry
+}
+
+type chatLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
+type chatLockRegistry struct {
+	mu    sync.Mutex
+	locks map[int64]*chatLock
+}
+
+func newChatLockRegistry() *chatLockRegistry {
+	return &chatLockRegistry{locks: map[int64]*chatLock{}}
+}
+
+func (reg *chatLockRegistry) acquire(chatID int64) func() {
+	reg.mu.Lock()
+	l := reg.locks[chatID]
+	if l == nil {
+		l = &chatLock{}
+		reg.locks[chatID] = l
+	}
+	l.refs++
+	reg.mu.Unlock()
+
+	l.mu.Lock()
+	return func() {
+		l.mu.Unlock()
+		reg.mu.Lock()
+		l.refs--
+		if l.refs <= 0 && reg.locks[chatID] == l {
+			delete(reg.locks, chatID)
+		}
+		reg.mu.Unlock()
+	}
+}
+
+func (r *Runner) lockRegistry() *chatLockRegistry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.locks == nil {
+		r.locks = newChatLockRegistry()
+	}
+	return r.locks
+}
+
+// Clone returns a shallow copy of Runner with isolated mutable model state
+// while sharing stores, tools, fallbacks, logger, and chat locks.
+func (r *Runner) Clone() *Runner {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.locks == nil {
+		r.locks = newChatLockRegistry()
+	}
+	return &Runner{
+		Provider:           r.Provider,
+		Tools:              r.Tools,
+		Store:              r.Store,
+		Model:              r.Model,
+		Cwd:                r.Cwd,
+		MaxIters:           r.MaxIters,
+		MaxTokens:          r.MaxTokens,
+		Memory:             r.Memory,
+		Skills:             r.Skills,
+		Approve:            r.Approve,
+		Out:                r.Out,
+		PriceIn:            r.PriceIn,
+		PriceOut:           r.PriceOut,
+		ContextWindow:      r.ContextWindow,
+		AuxModel:           r.AuxModel,
+		AuxProvider:        r.AuxProvider,
+		AuxPriceIn:         r.AuxPriceIn,
+		AuxPriceOut:        r.AuxPriceOut,
+		AutoCompact:        r.AutoCompact,
+		DisableAutoCompact: r.DisableAutoCompact,
+		Threshold:          r.Threshold,
+		Vision:             r.Vision,
+		ToolsDisabled:      r.ToolsDisabled,
+		Depth:              r.Depth,
+		TurnTimeout:        r.TurnTimeout,
+		Limits:             r.Limits,
+		PromptPrefix:       r.PromptPrefix,
+		ApprovalCfg:        r.ApprovalCfg,
+		Fallbacks:          r.Fallbacks,
+		SubagentCall:       r.SubagentCall,
+		Logger:             r.Logger,
+		locks:              r.locks,
+	}
 }
 
 // SetModel updates the active model (and provider capabilities if prov is non-nil)
@@ -148,19 +240,7 @@ func (r *Runner) primaryTarget() FallbackTarget {
 // a running turn, but cron fires on its own schedule, so without this two
 // writers could interleave one chat's history and break tool-call pairing.
 func (r *Runner) lockChat(chatID int64) func() {
-	r.mu.Lock()
-	if r.chatLocks == nil {
-		r.chatLocks = map[int64]*sync.Mutex{}
-	}
-	l := r.chatLocks[chatID]
-	if l == nil {
-		l = &sync.Mutex{}
-		r.chatLocks[chatID] = l
-	}
-	r.mu.Unlock()
-
-	l.Lock()
-	return l.Unlock
+	return r.lockRegistry().acquire(chatID)
 }
 
 // Run executes one user turn.
@@ -258,7 +338,12 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		if win <= 0 {
 			win = 32000
 		}
-		if !r.DisableAutoCompact && ShouldCompact(history, win, r.threshold()) {
+		sysPrompt := r.system()
+		var toolDefs []provider.ToolDef
+		if r.Tools != nil {
+			toolDefs = r.Tools.Defs()
+		}
+		if !r.DisableAutoCompact && ShouldCompactRequest(sysPrompt, toolDefs, history, win, r.threshold()) {
 			summary := r.summarize(ctx, history)
 			if compacted, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err == nil && len(compacted) > 0 {
 				history = compacted
@@ -267,7 +352,6 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			}
 		}
 
-		sysPrompt := r.system()
 		if i == 0 && userCount > 0 && userCount%12 == 0 && r.Memory != nil {
 			sysPrompt += "\n[pengingat sistem: jika ada fakta penting baru tentang user atau keputusan jangka panjang, perbarui tool memory; jika ada prosedur baru, simpan ke tool skill]"
 		}
@@ -400,21 +484,34 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 		return "ditolak: tool MCP tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
 	}
 	if t.Danger() {
+		chatID := tool.ChatIDFrom(ctx)
 		// 1. Check declarative approval rules from config first.
 		if decided, allowed := r.ApprovalCfg.Check(call.Name, []byte(call.Arguments)); decided {
+			if r.Logger != nil {
+				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "config", "allowed", allowed)
+			}
 			if !allowed {
 				return "ditolak: aturan approval konfigurasi menolak perintah ini"
 			}
 			// Pre-approved by config rule (e.g. mode: "auto" or always_allowed)
 		} else {
 			if isUnattended(ctx) {
+				if r.Logger != nil {
+					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "unattended", "allowed", false)
+				}
 				return "ditolak: perintah berbahaya tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
 			}
 			// 2. Fall back to interactive prompt (Telegram inline keyboard / CLI y/n)
 			if r.Approve == nil {
+				if r.Logger != nil {
+					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "no_approver", "allowed", false)
+				}
 				return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
 			}
 			allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
+			if r.Logger != nil {
+				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "interactive", "allowed", allowed, "err", err)
+			}
 			if err != nil {
 				return "approval gagal: " + err.Error()
 			}
@@ -538,6 +635,9 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		Store:              r.Store,
 		Model:              primary.Model,
 		AuxModel:           r.AuxModel,
+		AuxProvider:        r.AuxProvider,
+		AuxPriceIn:         r.AuxPriceIn,
+		AuxPriceOut:        r.AuxPriceOut,
 		Cwd:                r.Cwd,
 		MaxIters:           15,
 		MaxTokens:          primary.MaxTokens,
@@ -553,6 +653,7 @@ func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
 		PromptPrefix:       r.PromptPrefix,
 		ApprovalCfg:        r.ApprovalCfg,
 		Fallbacks:          r.Fallbacks,
+		Logger:             r.Logger,
 		Memory:             r.Memory,
 		Skills:             r.Skills,
 		Approve:            r.Approve,

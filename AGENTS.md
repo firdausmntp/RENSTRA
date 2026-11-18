@@ -71,6 +71,9 @@ internal/skill/
 internal/memory/
   memory.go        # Store MEMORY.md (2200 rune) & USER.md (1375 rune), Snapshot(), atomic write
 
+internal/migrate/
+  hermes.go        # Impor data dari Hermes Agent (~/.hermes) ke $RENSTRA_HOME (`renstra migrate hermes`)
+
 internal/cron/
   cron.go          # Parser cron 5-field + @hourly/@daily/@weekly, NextAfter, Run ticker tanpa backfill
 
@@ -178,10 +181,6 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Prioritas Pengembangan Berikutnya (Backlog v1.1)
+## 7. Status Rilis & Pengembangan (v1.1.0)
 
-Lihat detail rancangan di [docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md](docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md):
-1. **Propagasi Kedalaman Subagent (`RunSubagent`):** Clone registry tool dengan `NewDelegate(r, depth+1)` agar batas `depth >= 2` aktif antar generasi subagent.
-2. **Multimodal Vision & Kirim Balik File Telegram:** Teruskan foto di `workspace/inbox/` sebagai content image untuk model `vision: true`, plus tool kirim dokumen/gambar ke Telegram.
-3. **MCP HTTP/SSE, Auto-Reconnect & Filter Cron:** Transport `url` di `internal/mcp/client.go`, restart otomatis jika `Client.Dead()`, dan pembatasan tool `mcp__*` pada job cron unattended.
-4. **Aktivasi Provider Stub & Mode Prompted Tools:** Implementasi `openrouter`/`groq`/`ollama`/`mistral`/`xai`/`google` serta fallback JSON prompted-tools untuk model dengan `tools: false`.
+Fitur v1.1.0 telah diimplementasikan (seluruh daftar hardening keamanan, concurrency/reliabilitas, migrasi `renstra migrate hermes`, paritas REPL CLI, import skill `<dir|git-url>`, checkpoint backup & retensi file, serta dukungan ke-8 provider + prompted tools + multimodal vision & transkripsi suara). Lihat arsitektur rencana awal di [docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md](docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md) dan daftar perbaikan di [TODO.md](TODO.md).

@@ -13,7 +13,8 @@ import (
 
 func fetch(t *testing.T, url string) string {
 	t.Helper()
-	out, err := tool.NewWebFetch().Execute(context.Background(), args(t, map[string]string{"url": url}))
+	wf := &tool.WebFetch{AllowPrivate: true}
+	out, err := wf.Execute(context.Background(), args(t, map[string]string{"url": url}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,5 +110,25 @@ func TestWebFetchSchemaShape(t *testing.T) {
 	}
 	if tool.NewWebFetch().Name() != "web_fetch" || tool.NewWebFetch().Danger() {
 		t.Fatal("nama/danger salah")
+	}
+}
+
+func TestWebFetchBlocksSSRF(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("secret metadata"))
+	}))
+	defer srv.Close()
+
+	wf := tool.NewWebFetch()
+	for _, target := range []string{
+		srv.URL,
+		"http://127.0.0.1:8080/latest/meta-data",
+		"http://169.254.169.254/latest/meta-data",
+		"http://10.0.0.1/internal",
+		"http://[::1]:8080/",
+	} {
+		if _, err := wf.Execute(context.Background(), args(t, map[string]string{"url": target})); err == nil {
+			t.Errorf("seharusnya menolak target SSRF %q", target)
+		}
 	}
 }

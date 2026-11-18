@@ -400,4 +400,91 @@ func (i *inspectProvider) Stream(_ context.Context, req provider.Request) (<-cha
 	return ch, nil
 }
 
+func TestRunnerCloneIsolatesModel(t *testing.T) {
+	s := newStore(t)
+	var mu sync.Mutex
+	var seen []string
+	prov := &inspectProvider{fn: func(req provider.Request) []provider.Event {
+		mu.Lock()
+		seen = append(seen, req.Model)
+		mu.Unlock()
+		return []provider.Event{{Text: "ok:" + req.Model, Done: true}}
+	}}
+	parent := &agent.Runner{
+		Provider: prov,
+		Tools:    tool.NewRegistry(),
+		Store:    s,
+		Model:    "model-a",
+		Cwd:      t.TempDir(),
+		Out:      io.Discard,
+	}
+	clone := parent.Clone()
+	clone.SetModel(prov, "model-b", 1024, 32000, 0, 0)
+
+	if _, err := parent.Run(context.Background(), 1, "satu"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := clone.Run(context.Background(), 2, "dua"); err != nil {
+		t.Fatal(err)
+	}
+	if parent.GetModel() != "model-a" || clone.GetModel() != "model-b" {
+		t.Fatalf("model tidak terisolasi: parent=%s clone=%s", parent.GetModel(), clone.GetModel())
+	}
+	if len(seen) != 2 || seen[0] != "model-a" || seen[1] != "model-b" {
+		t.Fatalf("model request salah: %v", seen)
+	}
+}
+
+func TestSummarizeUsesAuxProviderAndRecordsUsage(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	for i := 0; i < 8; i++ {
+		if _, err := s.AppendMessage(ctx, 1, provider.Message{Role: provider.RoleUser, Content: strings.Repeat("panjang ", 50)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var auxCalled bool
+	auxProv := &inspectProvider{fn: func(req provider.Request) []provider.Event {
+		auxCalled = true
+		if req.Model != "aux-cheap" {
+			t.Errorf("aux model = %q, ingin aux-cheap", req.Model)
+		}
+		return []provider.Event{
+			{Text: "ringkas aux", Usage: &provider.Usage{InputTokens: 1000, OutputTokens: 500}, Done: true},
+		}
+	}}
+	mainProv := &inspectProvider{fn: func(req provider.Request) []provider.Event {
+		return []provider.Event{{Text: "jawaban akhir", Done: true}}
+	}}
+
+	r := &agent.Runner{
+		Provider:      mainProv,
+		AuxProvider:   auxProv,
+		AuxModel:      "aux-cheap",
+		AuxPriceIn:    2.0,
+		AuxPriceOut:   4.0,
+		Tools:         tool.NewRegistry(),
+		Store:         s,
+		Model:         "main-model",
+		ContextWindow: 200,
+		Threshold:     0.5,
+		Cwd:           t.TempDir(),
+		Out:           io.Discard,
+	}
+	if _, err := r.Run(ctx, 1, "lanjut"); err != nil {
+		t.Fatal(err)
+	}
+	if !auxCalled {
+		t.Fatal("AuxProvider tidak dipanggil saat kompaksi")
+	}
+	u, err := s.UsageForDay(ctx, time.Now().Format("2006-01-02"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TokensIn != 1000 || u.TokensOut != 500 {
+		t.Fatalf("usage aux tidak tercatat: %+v", u)
+	}
+}
+
 var _ = filepath.Join

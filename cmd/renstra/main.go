@@ -17,7 +17,7 @@ import (
 	"renstra/internal/tool"
 )
 
-var version = "v1.0.0"
+var version = "v1.1.0"
 
 func main() {
 	args := os.Args[1:]
@@ -64,6 +64,11 @@ func main() {
 		}
 	case "config":
 		configCmd(args[1:])
+	case "migrate":
+		if err := migrateCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	case "version", "-v", "--version":
 		fmt.Println("renstra", version)
 	default:
@@ -77,9 +82,11 @@ func usage() {
   renstra setup                      wizard konfigurasi awal (token bot, key, dll)
   renstra serve                      jalankan gateway Telegram + cron
   renstra chat [model]               sesi chat interaktif di CLI
+  renstra migrate hermes [flags]     impor memori, skill, config & riwayat dari ~/.hermes
   renstra model list                 daftar provider aktif
   renstra skill list [--global]      lihat skill terdaftar
-  renstra skill add <n> <d> <b>      tambah skill baru
+  renstra skill add <dir|url>        impor skill dari direktori atau git URL
+  renstra skill add <n> <d> <b>      tambah skill baru secara langsung
   renstra skill rm <n> [--global]    hapus skill
   renstra mcp list                   daftar server MCP terdaftar
   renstra usage                      laporan pemakaian token & biaya
@@ -122,6 +129,7 @@ func chatCmd(args []string) error {
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		return err
 	}
+	pruneRetention(cfg, home, workspace)
 
 	st, err := store.Open(filepath.Join(home, "state.db"))
 	if err != nil {
@@ -137,12 +145,20 @@ func chatCmd(args []string) error {
 		skill.Layer{Dir: filepath.Join(globalBaseDir(), "skills"), Writable: false},
 	)
 
+	checkpointsDir := filepath.Join(home, "checkpoints")
+	wfTool := tool.NewWriteFile(workspace)
+	wfTool.BackupDir = checkpointsDir
+	patchTool := tool.NewPatch(workspace)
+	patchTool.BackupDir = checkpointsDir
+	webFetchTool := tool.NewWebFetch()
+	webFetchTool.AllowPrivate = cfg.Tools.AllowPrivateFetch
+
 	tools := []tool.Tool{
 		tool.NewTerminal(workspace, 0),
 		tool.NewReadFile(workspace),
-		tool.NewWriteFile(workspace),
-		tool.NewPatch(workspace),
-		tool.NewWebFetch(),
+		wfTool,
+		patchTool,
+		webFetchTool,
 		tool.NewWebSearch(),
 		tool.NewSessionSearch(st),
 	}
@@ -154,18 +170,21 @@ func chatCmd(args []string) error {
 	}
 	tools = append(tools, tool.NewCron(st, 1))
 
-	auxModel := cfg.Agent.AuxModel
-	if auxModel == "" {
-		auxModel = model
+	mc := pcfg.ModelConfig(model)
+	auxProv, auxModel, auxIn, auxOut, auxErr := resolveAuxTarget(cfg, prov, model, mc)
+	if auxErr != nil {
+		fmt.Fprintf(os.Stderr, "peringatan aux_model tidak valid: %v\n", auxErr)
 	}
 
-	mc := pcfg.ModelConfig(model)
 	r := &agent.Runner{
 		Provider:           prov,
 		Tools:              tool.NewRegistry(),
 		Store:              st,
 		Model:              model,
 		AuxModel:           auxModel,
+		AuxProvider:        auxProv,
+		AuxPriceIn:         auxIn,
+		AuxPriceOut:        auxOut,
 		Cwd:                workspace,
 		MaxIters:           cfg.Agent.MaxIterations,
 		MaxTokens:          mc.MaxOutput,
@@ -198,5 +217,20 @@ func chatCmd(args []string) error {
 	fmt.Printf("renstra — %s (%s). /help untuk bantuan.\n\n", model, filepath.Base(pcfg.BaseURL))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	return cli.Run(ctx, r, 1, os.Stdin, os.Stdout)
+	return cli.RunWithOptions(ctx, r, 1, os.Stdin, os.Stdout, cli.RunOptions{
+		SwitchModel: func(ref string) (string, error) {
+			nextPCfg, nextModel, err := config.Resolve(ref, cfg)
+			if err != nil {
+				return "", err
+			}
+			nextProv, err := buildProvider(nextPCfg)
+			if err != nil {
+				return "", err
+			}
+			nextMC := nextPCfg.ModelConfig(nextModel)
+			r.SetModel(nextProv, nextModel, nextMC.MaxOutput, nextMC.Context, nextMC.PriceIn, nextMC.PriceOut)
+			r.SetCapabilities(nextMC.Vision, nextMC.Tools != nil && !*nextMC.Tools)
+			return fmt.Sprintf("Model aktif diganti ke: %s", nextModel), nil
+		},
+	})
 }

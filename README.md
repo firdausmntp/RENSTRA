@@ -35,8 +35,8 @@
 - **Rich Messages & Live Draft Streaming:** Mendukung `sendRichMessageDraft` & `sendRichMessage` (hingga 32.768 karakter untuk tabel, list, blok kode, dan LaTeX) beserta tombol **Stop** bawaan Telegram (`stopped_message_generation`), dengan fallback otomatis ke `sendMessage` / `editMessageText` berformat HTML.
 - **Indikator Typing & Auto-Menu:** Mengirim `sendChatAction: typing` berkala saat agent bekerja, dan otomatis mendaftarkan menu `/` (`setMyCommands`) saat startup.
 - **Approval Inline Keyboard:** Perintah berisiko (`terminal`, tool MCP) mengirim tombol **Setuju / Tolak** di Telegram (timeout 120 detik), lalu otomatis mengedit pesan menjadi `✅ Disetujui` atau `❌ Ditolak` saat keputusan dipilih.
-- **Lampiran Dua Arah (Multimodal + `send_file`):** Dokumen, foto (diteruskan sebagai gambar untuk model `vision: true`), serta `voice`/`audio` otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/`; agent juga dapat mengirim file/gambar balik ke chat lewat `send_file`.
-- **Interrupt & Anti-Dobel Tahan Restart:** Pesan baru di chat yang sibuk menginterupsi turn berjalan secara aman tanpa memutus pasangan `tool_calls` di SQLite. Dedup `updates_seen` mencegah balasan ganda setelah restart, dan turn yang terputus akibat restart diberi notifikasi otomatis.
+- **Lampiran Dua Arah (Multimodal + `send_file`):** Dokumen, foto (diteruskan sebagai gambar untuk model `vision: true`), serta `voice`/`audio` otomatis diunduh ke `$RENSTRA_HOME/workspace/inbox/` (dengan transkripsi suara opsional via Whisper bila provider OpenAI/Groq aktif); agent juga dapat mengirim file/gambar balik ke chat lewat `send_file`.
+- **Interrupt, Isolasi Chat & Anti-Dobel Tahan Restart:** Pesan baru di chat yang sibuk menginterupsi turn berjalan secara aman tanpa memutus pasangan `tool_calls` di SQLite. Perubahan `/model` terisolasi per chat dan tidak menggeser model `cron`. Dedup `updates_seen` mencegah balasan ganda setelah restart, dan turn yang terputus akibat restart diberi notifikasi otomatis.
 
 ### Self-Improving Memory & 4-Layer Skills
 - **Persistent Memory (`MEMORY.md` & `USER.md`):** Catatan kerja agent (maks 2.200 karakter) dan profil pengguna (maks 1.375 karakter) di-snapshot saat sesi dimulai agar *prompt prefix cache* tetap hangat, dengan pengingat berkala setiap 12 pesan user.
@@ -45,8 +45,10 @@
 ### Smart Context, Pencarian & Keamanan
 - **Auto-Compaction & `session_search`:** Saat pemakaian token melewati ambang konteks model (default 70%), percakapan lama diringkas memakai `aux_model` sambil menjaga grup `assistant(tool_calls)` + `tool` tetap utuh. Riwayat lama tetap dapat dicari kembali lewat `session_search`.
 - **Multi-Provider & Auto-Failover:** Mendukung **OpenAI**, **Anthropic**, **Google Gemini**, **OpenRouter**, **Groq**, **Ollama**, **Mistral**, **xAI**, dan endpoint `custom` OpenAI-compatible (termasuk proxy & header kustom), lengkap dengan alias model, persistensi `/model` per chat, mode *prompted tools* (`tools: false`), dan rantai `fallbacks`.
-- **Guardrails & Kontrol Biaya:**
-  - Aturan approval deklaratif (`mode: prompt | auto | deny`, `always_allowed`, `always_denied`).
+- **Guardrails & Kontrol Biaya (v1.1.0):**
+  - Aturan approval deklaratif (`mode: prompt | auto | deny`, `always_allowed` anti-chain/injection, `always_denied`) serta audit log `slog` untuk approval & fallback.
+  - Proteksi SSRF pada `web_fetch` (blokir loopback, private/CGNAT, link-local, metadata IP) dan denylist file sensitif (`.env*`, `config.yaml`, `mcp.yaml`, `state.db*`, `.ssh`, `.aws`, `.gnupg`, `.kube`, `auth.json`).
+  - Checkpoint backup otomatis di `$RENSTRA_HOME/checkpoints/` sebelum `write_file`/`patch`, serta pembersihan file lama otomatis (`file_retention_days`).
   - Deteksi loop otomatis jika tool dan argumen identik dipanggil 3× berturut-turut.
   - Batas timeout per turn, pelaporan biaya/token (`/usage`, `/insights`), peringatan `warn_daily_usd`, dan hard cap opsional `max_daily_usd` / `max_daily_tokens`.
   - Konten luar (`web_fetch`, `web_search`, `mcp`) ditandai `[untrusted]`; subprocess `terminal` hanya mewarisi environment allowlist tanpa membocorkan API key.
@@ -104,7 +106,7 @@ make linux-arm64   # menghasilkan renstra-linux-arm64
 ./renstra setup
 ```
 
-Wizard interaktif akan menanyakan Token Bot Telegram, provider (`openai` / `anthropic`), base URL, nama environment variable API key, model default, Telegram User ID yang diizinkan, dan mode approval, lalu menulis `config.yaml` (izin `0600`). Alternatifnya, salin [`config.example.yaml`](config.example.yaml).
+Wizard interaktif akan menanyakan Token Bot Telegram, provider (`openai` / `anthropic` / `google` / `openrouter` / `groq` / `ollama` / `mistral` / `xai`), base URL, nama environment variable API key, model default, Telegram User ID yang diizinkan, dan mode approval, lalu menulis `config.yaml` (izin `0600`). Alternatifnya, salin [`config.example.yaml`](config.example.yaml).
 
 ### 3. Set API Key & Jalankan Gateway Telegram
 
@@ -148,10 +150,12 @@ export OPENAI_API_KEY="sk-..."
 |---|---|
 | `renstra setup` | Wizard interaktif untuk membuat `config.yaml` |
 | `renstra serve` | Menjalankan gateway Telegram long polling + cron scheduler + MCP |
-| `renstra chat [model]` | Sesi chat interaktif di terminal (REPL) |
+| `renstra chat [model]` | Sesi chat interaktif di terminal REPL (`/new`, `/compact`, `/usage`, `/model`, `/skills`, `/memory`) |
+| `renstra migrate hermes [--from <dir>] [--dry-run] [--force]` | Impor memory, skills, config, MCP & riwayat sesi dari `~/.hermes` |
 | `renstra model list` | Daftar provider aktif, konfigurasi, dan alias |
 | `renstra skill list [--global]` | Melihat skill terdaftar beserta info konflik antar lapis |
-| `renstra skill add <name> <desc> <body> [--global]` | Menambahkan skill baru |
+| `renstra skill add <dir\|git-url> [--global]` | Mengimpor skill dari direktori lokal atau repo git (`SKILL.md`) |
+| `renstra skill add <name> <desc> <body> [--global]` | Menambahkan skill baru secara inline |
 | `renstra skill rm <name> [--global]` | Menghapus skill dari lapis writable |
 | `renstra mcp list` | Menampilkan server MCP yang terdaftar di `mcp.yaml` |
 | `renstra usage` | Laporan pemakaian token & estimasi biaya (hari ini & 30 hari) |
@@ -185,6 +189,7 @@ $RENSTRA_HOME/
     MEMORY.md           # Catatan kerja jangka panjang agent (maks 2.200 char)
     USER.md             # Profil dan preferensi user (maks 1.375 char)
   skills/               # Skill milik instance (dapat ditulis agent lewat tool `skill`)
+  checkpoints/          # Backup checkpoint sebelum write_file / patch
   workspace/            # Working directory default untuk terminal & file tools
     .skills/            # Skill lokal proyek (read-only)
     skills/             # Skill lokal proyek (read-only)

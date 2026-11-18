@@ -8,9 +8,75 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const maxReadSize = 10 * 1024 * 1024
+
+// checkSensitivePath menolak akses ke file kredensial, konfigurasi rahasia,
+// dan direktori sensitif (termasuk via symlink).
+func checkSensitivePath(path string) error {
+	candidates := []string{filepath.Clean(path)}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		candidates = append(candidates, resolved)
+	} else if parentResolved, perr := filepath.EvalSymlinks(filepath.Dir(path)); perr == nil {
+		candidates = append(candidates, filepath.Join(parentResolved, filepath.Base(path)))
+	}
+	for _, c := range candidates {
+		if isSensitivePath(c) {
+			return fmt.Errorf("akses ke file/direktori sensitif ditolak: %s", filepath.Base(path))
+		}
+	}
+	return nil
+}
+
+func isSensitivePath(path string) bool {
+	slashed := filepath.ToSlash(filepath.Clean(path))
+	parts := strings.Split(slashed, "/")
+	for _, part := range parts {
+		switch strings.ToLower(part) {
+		case ".ssh", ".aws", ".gnupg", ".kube":
+			return true
+		}
+	}
+	base := strings.ToLower(filepath.Base(slashed))
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	if base == "state.db" || strings.HasPrefix(base, "state.db-") {
+		return true
+	}
+	switch base {
+	case "config.yaml", "mcp.yaml", "auth.json":
+		return true
+	}
+	return false
+}
+
+func backupExistingFile(backupDir, cwd, path string) {
+	if backupDir == "" {
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxReadSize {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
+		return
+	}
+	label := filepath.Base(path)
+	if cwd != "" {
+		if rel, rerr := filepath.Rel(cwd, path); rerr == nil && !strings.HasPrefix(rel, "..") {
+			label = rel
+		}
+	}
+	name := fmt.Sprintf("%s.%s.bak", sanitize(label), time.Now().UTC().Format("20060102T150405.000000000"))
+	_ = os.WriteFile(filepath.Join(backupDir, name), data, 0o600)
+}
 
 // resolve makes relative paths resolve against the tool's cwd, matching the
 // terminal and the prompt. Absolute paths are left alone: the agent may read
@@ -51,6 +117,9 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 		return "", fmt.Errorf("offset/limit tidak boleh negatif (offset=%d limit=%d)", in.Offset, in.Limit)
 	}
 	path := resolve(t.cwd, in.Path)
+	if err := checkSensitivePath(path); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -79,7 +148,10 @@ func (t *ReadFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	return strings.Join(lines, "\n"), nil
 }
 
-type WriteFile struct{ cwd string }
+type WriteFile struct {
+	cwd       string
+	BackupDir string
+}
 
 func NewWriteFile(cwd string) *WriteFile { return &WriteFile{cwd: cwd} }
 
@@ -101,16 +173,23 @@ func (t *WriteFile) Execute(ctx context.Context, raw json.RawMessage) (string, e
 		return "", fmt.Errorf("argumen write_file tidak valid: %w", err)
 	}
 	path := resolve(t.cwd, in.Path)
+	if err := checkSensitivePath(path); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
 	}
+	backupExistingFile(t.BackupDir, t.cwd, path)
 	if err := atomicWrite(path, []byte(in.Content)); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("ditulis: %s (%d byte)", path, len(in.Content)), nil
 }
 
-type Patch struct{ cwd string }
+type Patch struct {
+	cwd       string
+	BackupDir string
+}
 
 func NewPatch(cwd string) *Patch { return &Patch{cwd: cwd} }
 
@@ -136,6 +215,9 @@ func (t *Patch) Execute(ctx context.Context, raw json.RawMessage) (string, error
 		return "", errors.New("old tidak boleh kosong")
 	}
 	path := resolve(t.cwd, in.Path)
+	if err := checkSensitivePath(path); err != nil {
+		return "", err
+	}
 	raw2, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -148,6 +230,7 @@ func (t *Patch) Execute(ctx context.Context, raw json.RawMessage) (string, error
 	default:
 		return "", fmt.Errorf("teks old muncul %d kali di %s; perlu konteks lebih unik", n, path)
 	}
+	backupExistingFile(t.BackupDir, t.cwd, path)
 	if err := atomicWrite(path, []byte(strings.Replace(body, in.Old, in.New, 1))); err != nil {
 		return "", err
 	}

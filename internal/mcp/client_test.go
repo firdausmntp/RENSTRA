@@ -312,3 +312,50 @@ func TestConnectHTTPTransportAndCall(t *testing.T) {
 		t.Fatalf("res = %q", res)
 	}
 }
+
+func TestReconnectRefreshesToolMetadata(t *testing.T) {
+	version := 1
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var req rpcMessage
+		_ = json.Unmarshal(raw, &req)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			_ = json.NewEncoder(w).Encode(rpcMessage{JSONRPC: "2.0", ID: req.ID, Result: json.RawMessage(`{"protocolVersion":"2024-11-05","capabilities":{}}`)})
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			desc := "desk v1"
+			if version == 2 {
+				desc = "desk v2"
+			}
+			_ = json.NewEncoder(w).Encode(rpcMessage{
+				JSONRPC: "2.0",
+				ID:      req.ID,
+				Result:  json.RawMessage(fmt.Sprintf(`{"tools":[{"name":"ping","description":%q,"inputSchema":{"type":"object"}}]}`, desc)),
+			})
+		}
+	}))
+	defer srv.Close()
+
+	c, err := Connect(context.Background(), ServerConfig{Name: "remote", URL: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldTool := c.Tools()[0]
+	if heldTool.Description() != "desk v1" {
+		t.Fatalf("awal = %q, ingin desk v1", heldTool.Description())
+	}
+
+	version = 2
+	c.pendMu.Lock()
+	c.dead = true
+	c.pendMu.Unlock()
+	if err := c.Reconnect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if heldTool.Description() != "desk v2" {
+		t.Fatalf("setelah reconnect = %q, ingin desk v2", heldTool.Description())
+	}
+}

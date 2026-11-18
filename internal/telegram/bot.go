@@ -37,7 +37,8 @@ type Config struct {
 	WorkspaceDir string
 	// OnSeen is called for every update id before it is dispatched, so the
 	// caller can persist it and keep dedup working across restarts.
-	OnSeen func(updateID int64)
+	OnSeen     func(updateID int64)
+	Transcribe func(ctx context.Context, audioPath string) (string, error)
 }
 
 type Handler interface {
@@ -52,6 +53,7 @@ type Bot struct {
 	workspaceDir string
 	allowed      map[int64]struct{}
 	onSeen       func(int64)
+	transcribe   func(context.Context, string) (string, error)
 	http         *http.Client
 
 	mu          sync.Mutex
@@ -80,10 +82,11 @@ type chatLock struct {
 }
 
 type pendingApproval struct {
-	id    int64
-	msgID int64
-	tool  string
-	ch    chan bool
+	id     int64
+	chatID int64
+	msgID  int64
+	tool   string
+	ch     chan bool
 }
 
 func New(cfg Config) (*Bot, error) {
@@ -109,6 +112,7 @@ func New(cfg Config) (*Bot, error) {
 		workspaceDir: cfg.WorkspaceDir,
 		allowed:      allowed,
 		onSeen:       cfg.OnSeen,
+		transcribe:   cfg.Transcribe,
 		// The client must outlive one long poll.
 		http:    &http.Client{Timeout: poll + 30*time.Second},
 		seen:    map[int64]struct{}{},
@@ -390,6 +394,11 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Voice diterima: %s (durasi: %ds, mime: %s)]", saved, m.Voice.Duration, m.Voice.MimeType))
+			if b.transcribe != nil {
+				if tr, terr := b.transcribe(turnCtx, saved); terr == nil && strings.TrimSpace(tr) != "" {
+					notes = append(notes, fmt.Sprintf("[Transkripsi suara]: %s", strings.TrimSpace(tr)))
+				}
+			}
 		}
 		if m.Audio != nil {
 			name := m.Audio.FileName
@@ -402,6 +411,11 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Audio diterima: %s (durasi: %ds, mime: %s)]", saved, m.Audio.Duration, m.Audio.MimeType))
+			if b.transcribe != nil {
+				if tr, terr := b.transcribe(turnCtx, saved); terr == nil && strings.TrimSpace(tr) != "" {
+					notes = append(notes, fmt.Sprintf("[Transkripsi suara]: %s", strings.TrimSpace(tr)))
+				}
+			}
 		}
 		prefix := strings.Join(notes, "\n")
 		if strings.TrimSpace(text) != "" {
@@ -432,15 +446,15 @@ func (b *Bot) handleCallback(ctx context.Context, cq callbackQuery) {
 	chatID := cq.Message.Chat.ID
 
 	b.mu.Lock()
-	p := b.pending[chatID]
+	p := b.pending[id]
 	var msgID int64
 	var toolName string
-	if p != nil && p.id == id {
+	if p != nil && p.chatID == chatID {
 		msgID = p.msgID
 		toolName = p.tool
 	}
 	b.mu.Unlock()
-	if p == nil || p.id != id {
+	if p == nil || p.chatID != chatID {
 		return
 	}
 	approved := action == "approve"
@@ -539,11 +553,11 @@ func (b *Bot) SendMessageReturningID(ctx context.Context, chatID int64, text str
 		"text":       markdownToHTML(text),
 		"parse_mode": "HTML",
 	})
-	if err != nil {
+	if isHTTP400(err) {
 		raw, err = b.post(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text})
-		if err != nil {
-			return 0, err
-		}
+	}
+	if err != nil {
+		return 0, err
 	}
 	var res struct {
 		MessageID int64 `json:"message_id"`
@@ -675,7 +689,7 @@ func (b *Bot) EditMessage(ctx context.Context, chatID int64, messageID int64, te
 		"text":       markdownToHTML(text),
 		"parse_mode": "HTML",
 	})
-	if err != nil {
+	if isHTTP400(err) {
 		_, err = b.post(ctx, "editMessageText", map[string]any{
 			"chat_id":    chatID,
 			"message_id": messageID,
@@ -787,14 +801,14 @@ func (b *Bot) AskApproval(ctx context.Context, chatID int64, tool, args string, 
 	b.mu.Lock()
 	b.approvalSeq++
 	id := b.approvalSeq
-	p := &pendingApproval{id: id, tool: tool, ch: make(chan bool, 1)}
-	b.pending[chatID] = p
+	p := &pendingApproval{id: id, chatID: chatID, tool: tool, ch: make(chan bool, 1)}
+	b.pending[id] = p
 	b.mu.Unlock()
 
 	defer func() {
 		b.mu.Lock()
-		if b.pending[chatID] == p {
-			delete(b.pending, chatID)
+		if b.pending[id] == p {
+			delete(b.pending, id)
 		}
 		b.mu.Unlock()
 	}()
@@ -825,14 +839,25 @@ func (b *Bot) AskApproval(ctx context.Context, chatID int64, tool, args string, 
 		b.mu.Unlock()
 	}
 
+	editOutcome := func(status string) {
+		if sent.MessageID <= 0 {
+			return
+		}
+		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = b.EditMessage(saveCtx, chatID, sent.MessageID, status)
+	}
+
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case v := <-p.ch:
 		return v, nil
 	case <-timer.C:
+		editOutcome("⌛ Approval kedaluwarsa: " + tool)
 		return false, nil
 	case <-ctx.Done():
+		editOutcome("🛑 Approval dibatalkan: " + tool)
 		return false, ctx.Err()
 	}
 }
@@ -846,7 +871,20 @@ type apiResponse struct {
 	} `json:"parameters"`
 }
 
-// post calls one Bot API method and retries once on 429, honouring retry_after.
+type apiError struct {
+	method      string
+	status      int
+	description string
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("telegram %s: HTTP %d: %s", e.method, e.status, e.description)
+}
+
+func isHTTP400(err error) bool {
+	var ae *apiError
+	return errors.As(err, &ae) && ae.status == http.StatusBadRequest
+}
 func (b *Bot) post(ctx context.Context, method string, payload any) (json.RawMessage, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -892,7 +930,7 @@ func (b *Bot) post(ctx context.Context, method string, payload any) (json.RawMes
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode > 299 || !ar.OK {
-			return nil, fmt.Errorf("telegram %s: HTTP %d: %s", method, resp.StatusCode, ar.Description)
+			return nil, &apiError{method: method, status: resp.StatusCode, description: ar.Description}
 		}
 		return ar.Result, nil
 	}
@@ -965,17 +1003,22 @@ type callbackQuery struct {
 // StreamWriter streams incremental LLM deltas and tool execution status to
 // one Telegram chat using Bot API 10.4 sendRichMessageDraft/sendRichMessage,
 // automatically falling back to throttled SendMessage/EditMessage if needed.
+const draftRefreshInterval = 25 * time.Second
+
 type StreamWriter struct {
 	bot     *Bot
 	chatID  int64
 	draftID int64
+	turnCtx context.Context
+	cancel  context.CancelFunc
 
-	mu       sync.Mutex
-	buf      strings.Builder
-	toolNote string
-	lastEdit time.Time
-	lastSent string
-	closed   bool
+	mu          sync.Mutex
+	buf         strings.Builder
+	toolNote    string
+	lastEdit    time.Time
+	lastSent    string
+	closed      bool
+	keepaliveOn bool
 
 	sendMu      sync.Mutex
 	msgID       int64
@@ -984,11 +1027,29 @@ type StreamWriter struct {
 }
 
 func NewStreamWriter(bot *Bot, chatID int64) *StreamWriter {
+	return NewStreamWriterWithContext(context.Background(), bot, chatID)
+}
+
+func NewStreamWriterWithContext(ctx context.Context, bot *Bot, chatID int64) *StreamWriter {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	wctx, cancel := context.WithCancel(ctx)
 	var draftID int64 = 1
 	if bot != nil {
 		draftID = bot.nextDraftID()
 	}
-	return &StreamWriter{bot: bot, chatID: chatID, draftID: draftID}
+	return &StreamWriter{bot: bot, chatID: chatID, draftID: draftID, turnCtx: wctx, cancel: cancel}
+}
+
+// Cancel marks the stream writer closed and aborts any in-flight flush request.
+func (s *StreamWriter) Cancel() {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *StreamWriter) Write(p []byte) (int, error) {
@@ -996,7 +1057,7 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.turnCtx.Err() != nil {
 		s.mu.Unlock()
 		return len(p), nil
 	}
@@ -1004,8 +1065,9 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 	s.toolNote = ""
 	preview := s.renderLocked()
 	now := time.Now()
-	shouldFlush := preview != "" && preview != s.lastSent &&
-		(s.lastEdit.IsZero() || now.Sub(s.lastEdit) >= time.Second)
+	staleDraft := s.usedDraft && !s.draftFailed && !s.lastEdit.IsZero() && now.Sub(s.lastEdit) >= draftRefreshInterval
+	shouldFlush := preview != "" && ((preview != s.lastSent &&
+		(s.lastEdit.IsZero() || now.Sub(s.lastEdit) >= time.Second)) || staleDraft)
 	if shouldFlush {
 		s.lastEdit = now
 		s.lastSent = preview
@@ -1021,15 +1083,16 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 // OnTool updates the streaming message with the name of the tool currently running.
 func (s *StreamWriter) OnTool(name, args string) {
 	s.mu.Lock()
-	if s.closed {
+	if s.closed || s.turnCtx.Err() != nil {
 		s.mu.Unlock()
 		return
 	}
 	s.toolNote = fmt.Sprintf("⏳ Menjalankan `%s`...", name)
 	preview := s.renderLocked()
 	now := time.Now()
-	shouldFlush := preview != "" && preview != s.lastSent &&
-		(s.lastEdit.IsZero() || now.Sub(s.lastEdit) >= 800*time.Millisecond)
+	staleDraft := s.usedDraft && !s.draftFailed && !s.lastEdit.IsZero() && now.Sub(s.lastEdit) >= draftRefreshInterval
+	shouldFlush := preview != "" && ((preview != s.lastSent &&
+		(s.lastEdit.IsZero() || now.Sub(s.lastEdit) >= 800*time.Millisecond)) || staleDraft)
 	if shouldFlush {
 		s.lastEdit = now
 		s.lastSent = preview
@@ -1049,11 +1112,14 @@ func (s *StreamWriter) Finalize(ctx context.Context, finalReply string) bool {
 	s.closed = true
 	lastSent := s.lastSent
 	s.mu.Unlock()
+	if s.cancel != nil {
+		defer s.cancel()
+	}
 
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 
-	if s.bot == nil {
+	if s.bot == nil || ctx.Err() != nil {
 		return false
 	}
 	if s.usedDraft {
@@ -1109,15 +1175,33 @@ func (s *StreamWriter) flush(text string) {
 	if s.bot == nil || strings.TrimSpace(text) == "" {
 		return
 	}
+	if s.turnCtx != nil && s.turnCtx.Err() != nil {
+		return
+	}
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed || (s.turnCtx != nil && s.turnCtx.Err() != nil) {
+		return
+	}
+
+	base := s.turnCtx
+	if base == nil {
+		base = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(base, 10*time.Second)
 	defer cancel()
 
 	if !s.draftFailed {
 		if err := s.bot.SendRichMessageDraft(ctx, s.chatID, s.draftID, text, true, true); err == nil {
 			s.usedDraft = true
+			s.ensureKeepalive()
+			return
+		}
+		if base.Err() != nil {
 			return
 		}
 		s.draftFailed = true
@@ -1134,4 +1218,41 @@ func (s *StreamWriter) flush(text string) {
 		return
 	}
 	_ = s.bot.EditMessage(ctx, s.chatID, s.msgID, text)
+}
+
+func (s *StreamWriter) ensureKeepalive() {
+	s.mu.Lock()
+	if s.keepaliveOn || s.closed || s.turnCtx == nil || s.turnCtx.Done() == nil {
+		s.mu.Unlock()
+		return
+	}
+	s.keepaliveOn = true
+	s.mu.Unlock()
+
+	go func() {
+		t := time.NewTicker(draftRefreshInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-s.turnCtx.Done():
+				return
+			case <-t.C:
+				s.mu.Lock()
+				if s.closed || s.draftFailed || !s.usedDraft {
+					s.mu.Unlock()
+					return
+				}
+				since := time.Since(s.lastEdit)
+				preview := s.renderLocked()
+				if since >= draftRefreshInterval && preview != "" {
+					s.lastEdit = time.Now()
+					s.lastSent = preview
+					s.mu.Unlock()
+					s.flush(preview)
+					continue
+				}
+				s.mu.Unlock()
+			}
+		}
+	}()
 }

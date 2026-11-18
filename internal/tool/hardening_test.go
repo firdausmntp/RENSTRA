@@ -156,6 +156,113 @@ func TestWriteFileIsAtomicOnExistingFile(t *testing.T) {
 	}
 }
 
+type noopSender struct{}
+
+func (noopSender) SendFile(context.Context, int64, string, string, string) error { return nil }
+
+func TestSensitivePathsBlocked(t *testing.T) {
+	dir := t.TempDir()
+	sshDir := filepath.Join(dir, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targets := []string{
+		filepath.Join(dir, ".env"),
+		filepath.Join(dir, ".env.production"),
+		filepath.Join(dir, "config.yaml"),
+		filepath.Join(dir, "mcp.yaml"),
+		filepath.Join(dir, "state.db"),
+		filepath.Join(dir, "state.db-wal"),
+		filepath.Join(dir, "auth.json"),
+		filepath.Join(sshDir, "id_rsa"),
+	}
+	for _, p := range targets {
+		if err := os.WriteFile(p, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linkPath := filepath.Join(dir, "public.txt")
+	if err := os.Symlink(filepath.Join(dir, ".env"), linkPath); err == nil {
+		targets = append(targets, linkPath)
+	}
+
+	rf := tool.NewReadFile(dir)
+	wf := tool.NewWriteFile(dir)
+	pf := tool.NewPatch(dir)
+	sf := tool.NewSendFile(dir, noopSender{})
+	ctx := tool.WithChatID(context.Background(), 123)
+
+	for _, p := range targets {
+		if _, err := rf.Execute(ctx, args(t, map[string]string{"path": p})); err == nil {
+			t.Errorf("read_file seharusnya menolak %s", p)
+		}
+		if _, err := wf.Execute(ctx, args(t, map[string]string{"path": p, "content": "x"})); err == nil {
+			t.Errorf("write_file seharusnya menolak %s", p)
+		}
+		if _, err := pf.Execute(ctx, args(t, map[string]string{"path": p, "old": "secret", "new": "x"})); err == nil {
+			t.Errorf("patch seharusnya menolak %s", p)
+		}
+		if _, err := sf.Execute(ctx, args(t, map[string]string{"path": p})); err == nil {
+			t.Errorf("send_file seharusnya menolak %s", p)
+		}
+	}
+}
+
+func TestWriteFileAndPatchCreateBackupCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := t.TempDir()
+	p := filepath.Join(dir, "note.txt")
+	if err := os.WriteFile(p, []byte("versi1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wf := tool.NewWriteFile(dir)
+	wf.BackupDir = backupDir
+	if _, err := wf.Execute(context.Background(), args(t, map[string]string{"path": p, "content": "versi2"})); err != nil {
+		t.Fatal(err)
+	}
+	pf := tool.NewPatch(dir)
+	pf.BackupDir = backupDir
+	if _, err := pf.Execute(context.Background(), args(t, map[string]string{"path": p, "old": "versi2", "new": "versi3"})); err != nil {
+		t.Fatal(err)
+	}
+	backups, err := os.ReadDir(backupDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) < 2 {
+		t.Fatalf("harus ada minimal 2 backup checkpoint, dapat %d", len(backups))
+	}
+}
+
+func TestPruneOldFiles(t *testing.T) {
+	dir := t.TempDir()
+	oldFile := filepath.Join(dir, "old.txt")
+	newFile := filepath.Join(dir, "new.txt")
+	if err := os.WriteFile(oldFile, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newFile, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(oldFile, oldTime, oldTime); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := tool.PruneOldFiles(dir, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, ingin 1", removed)
+	}
+	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
+		t.Fatal("old.txt seharusnya terhapus")
+	}
+	if _, err := os.Stat(newFile); err != nil {
+		t.Fatal("new.txt seharusnya dipertahankan")
+	}
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a

@@ -55,6 +55,9 @@ func (t *SendFile) Execute(ctx context.Context, raw json.RawMessage) (string, er
 	}
 
 	path := resolve(t.cwd, in.Path)
+	if err := checkSensitivePath(path); err != nil {
+		return "", err
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err

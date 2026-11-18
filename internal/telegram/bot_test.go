@@ -622,3 +622,183 @@ func TestMarkdownToHTMLAndSendFile(t *testing.T) {
 		t.Fatalf("expected sendPhoto for .png, got %q", gotMethod)
 	}
 }
+
+func TestSendMessageNoPlainFallbackOnHTTP500(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+		io.WriteString(w, `{"ok":false,"description":"internal error"}`)
+	}))
+	defer srv.Close()
+
+	b, err := New(Config{Token: "tok", APIBase: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SendMessage(context.Background(), 42, "halo"); err == nil {
+		t.Fatal("seharusnya error pada HTTP 500")
+	}
+	if calls != 1 {
+		t.Fatalf("tidak boleh retry plain text pada HTTP 500, calls = %d", calls)
+	}
+
+	// Verify HTTP 400 still falls back to plain text once.
+	calls = 0
+	srv400 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		raw, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(raw), `"parse_mode"`) {
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"ok":false,"description":"can't parse entities"}`)
+			return
+		}
+		io.WriteString(w, `{"ok":true,"result":{"message_id":7}}`)
+	}))
+	defer srv400.Close()
+
+	b400, err := New(Config{Token: "tok", APIBase: srv400.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b400.SendMessage(context.Background(), 42, "halo"); err != nil {
+		t.Fatalf("HTTP 400 seharusnya fallback ke plain text: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls on 400 fallback, got %d", calls)
+	}
+}
+
+func TestAskApprovalConcurrentIDsAndTimeoutEdit(t *testing.T) {
+	api, b := newAPI(t)
+
+	// 1. Timeout must edit the inline approval message to reflect expiry.
+	ok, err := b.AskApproval(context.Background(), 42, "terminal", "ls", 30*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("timeout harus deny")
+	}
+	api.mu.Lock()
+	if len(api.edits) == 0 || !strings.Contains(fmt.Sprint(api.edits[len(api.edits)-1]["text"]), "kedaluwarsa") {
+		api.mu.Unlock()
+		t.Fatalf("pesan timeout tidak diedit: %+v", api.edits)
+	}
+	api.mu.Unlock()
+
+	// 2. Two concurrent AskApproval calls in the same chat stay distinct by approval ID.
+	var cbData []string
+	var cbMu sync.Mutex
+	api.mu.Lock()
+	api.onSend = func(p map[string]any) {
+		rm, _ := p["reply_markup"].(map[string]any)
+		if rm == nil {
+			return
+		}
+		kb, _ := rm["inline_keyboard"].([]any)
+		if len(kb) > 0 {
+			row, _ := kb[0].([]any)
+			if len(row) > 0 {
+				btn, _ := row[0].(map[string]any)
+				cbMu.Lock()
+				cbData = append(cbData, fmt.Sprint(btn["callback_data"]))
+				cbMu.Unlock()
+			}
+		}
+	}
+	api.mu.Unlock()
+
+	res1 := make(chan bool, 1)
+	res2 := make(chan bool, 1)
+	go func() {
+		v, _ := b.AskApproval(context.Background(), 99, "t1", "a1", time.Second)
+		res1 <- v
+	}()
+	go func() {
+		v, _ := b.AskApproval(context.Background(), 99, "t2", "a2", time.Second)
+		res2 <- v
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		cbMu.Lock()
+		n := len(cbData)
+		cbMu.Unlock()
+		if n == 2 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cbMu.Lock()
+	if len(cbData) != 2 {
+		cbMu.Unlock()
+		t.Fatalf("expected 2 concurrent approval buttons, got %d", len(cbData))
+	}
+	c0, c1 := cbData[0], cbData[1]
+	cbMu.Unlock()
+
+	b.handleCallback(context.Background(), callbackQuery{ID: "cb1", Data: c0, Message: &message{Chat: chat{ID: 99}}})
+	b.handleCallback(context.Background(), callbackQuery{ID: "cb2", Data: strings.Replace(c1, "approve:", "deny:", 1), Message: &message{Chat: chat{ID: 99}}})
+
+	r1, r2 := <-res1, <-res2
+	if r1 == r2 {
+		t.Fatalf("satu approve dan satu deny tidak boleh tertukar: r1=%v r2=%v", r1, r2)
+	}
+}
+
+func TestStreamWriterRespectsTurnContextCancel(t *testing.T) {
+	api, b := newAPI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	sw := NewStreamWriterWithContext(ctx, b, 42)
+	cancel()
+	if _, err := sw.Write([]byte("seharusnya tidak terkirim")); err != nil {
+		t.Fatal(err)
+	}
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	if len(api.richDrafts) != 0 || len(api.sent) != 0 {
+		t.Fatalf("flush tetap berjalan setelah context dibatalkan: drafts=%d sent=%d", len(api.richDrafts), len(api.sent))
+	}
+}
+
+func TestVoiceTranscriptionIncluded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getFile"):
+			io.WriteString(w, `{"ok":true,"result":{"file_path":"voice/v.ogg"}}`)
+		case strings.Contains(r.URL.Path, "/file/bot"):
+			w.Write([]byte("ogg"))
+		default:
+			io.WriteString(w, `{"ok":true,"result":{"message_id":1}}`)
+		}
+	}))
+	defer srv.Close()
+
+	bot, err := New(Config{
+		Token:        "tok",
+		AllowedUsers: []int64{42},
+		APIBase:      srv.URL,
+		WorkspaceDir: t.TempDir(),
+		Transcribe: func(_ context.Context, path string) (string, error) {
+			return "halo dunia dari suara", nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &captureHandler{}
+	bot.handleUpdate(context.Background(), h, update{
+		UpdateID: 1001,
+		Message: &message{
+			MessageID: 1001,
+			Chat:      chat{ID: 42, Type: "private"},
+			Voice:     &tgVoice{FileID: "vf1", Duration: 3, MimeType: "audio/ogg"},
+		},
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.seen) != 1 || !strings.Contains(h.seen[0], "[Transkripsi suara]: halo dunia dari suara") {
+		t.Fatalf("transkripsi tidak diteruskan ke handler: %v", h.seen)
+	}
+}

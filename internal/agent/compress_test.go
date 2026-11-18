@@ -2,7 +2,9 @@ package agent_test
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"renstra/internal/agent"
@@ -36,5 +38,21 @@ func TestCompactPreservesRecentMessages(t *testing.T) {
 	}
 	if compacted[0].Role != provider.RoleSystem || compacted[0].Content != "ringkasan: 4 pesan pertama dibahas" {
 		t.Fatalf("ringkasan salah: %+v", compacted[0])
+	}
+}
+
+func TestShouldCompactRequestIncludesSystemAndTools(t *testing.T) {
+	msgs := []provider.Message{{Role: provider.RoleUser, Content: "halo"}}
+	if agent.ShouldCompact(msgs, 100, 0.7) {
+		t.Fatal("history kecil tidak seharusnya memicu ShouldCompact")
+	}
+	bigSys := strings.Repeat("a", 400)
+	defs := []provider.ToolDef{{
+		Name:        "big_tool",
+		Description: strings.Repeat("b", 200),
+		Schema:      json.RawMessage(`{"type":"object"}`),
+	}}
+	if !agent.ShouldCompactRequest(bigSys, defs, msgs, 100, 0.7) {
+		t.Fatal("ShouldCompactRequest seharusnya memperhitungkan system prompt dan definisi tool")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"renstra/internal/provider"
@@ -124,4 +125,38 @@ func sanitize(name string) string {
 		cleaned = cleaned[:64]
 	}
 	return cleaned
+}
+
+// PruneOldFiles menghapus file reguler di bawah dir yang mtime-nya lebih tua dari maxAge.
+func PruneOldFiles(dir string, maxAge time.Duration) (int, error) {
+	if maxAge <= 0 || dir == "" {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			if rerr := os.Remove(path); rerr == nil {
+				removed++
+			}
+		}
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	return removed, err
 }

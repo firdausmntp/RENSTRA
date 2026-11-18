@@ -26,7 +26,14 @@ func (r *Runner) summarize(ctx context.Context, msgs []provider.Message) string 
 
 	primary := r.primaryTarget()
 	fallback := fallbackSummary(msgs)
-	if primary.Provider == nil {
+
+	prov := r.AuxProvider
+	priceIn, priceOut := r.AuxPriceIn, r.AuxPriceOut
+	if prov == nil {
+		prov = primary.Provider
+		priceIn, priceOut = primary.PriceIn, primary.PriceOut
+	}
+	if prov == nil {
 		return fallback
 	}
 
@@ -43,17 +50,24 @@ func (r *Runner) summarize(ctx context.Context, msgs []provider.Message) string 
 		MaxTokens: 800,
 	}
 
-	ch, err := primary.Provider.Stream(ctx, req)
+	ch, err := prov.Stream(ctx, req)
 	if err != nil {
 		return fallback
 	}
 
 	var b strings.Builder
+	var usage *provider.Usage
 	for ev := range ch {
 		if ev.Err != nil {
 			return fallback
 		}
+		if ev.Usage != nil {
+			usage = ev.Usage
+		}
 		b.WriteString(ev.Text)
+	}
+	if usage != nil {
+		r.recordUsageWithPrices(usage, priceIn, priceOut)
 	}
 	out := strings.TrimSpace(b.String())
 	if out == "" {

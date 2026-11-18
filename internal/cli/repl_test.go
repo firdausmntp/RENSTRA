@@ -70,3 +70,32 @@ func TestReplUnknownCommandIsSentToModel(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReplParityCommands(t *testing.T) {
+	s := newStore(t)
+	r := &agent.Runner{
+		Provider: &fakeProvider{},
+		Tools:    tool.NewRegistry(),
+		Store:    s,
+		Model:    "gpt-4o-mini",
+		Cwd:      t.TempDir(),
+		Out:      io.Discard,
+	}
+	in := strings.NewReader("/usage\n/model\n/model gpt-4o\n/skills\n/memory\n/exit\n")
+	var out bytes.Buffer
+	if err := cli.Run(context.Background(), r, 1, in, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"Penggunaan hari ini",
+		"Model aktif: gpt-4o-mini",
+		"Model aktif diganti ke: gpt-4o",
+		"Skill registry tidak aktif.",
+		"Memory store tidak aktif.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in REPL output:\n%s", want, got)
+		}
+	}
+}

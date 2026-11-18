@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -110,8 +111,11 @@ func TestSlashModelSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Model != "baru:claude" {
-		t.Fatalf("model = %q", r.Model)
+	if got := h.runnerForChat(context.Background(), 10).GetModel(); got != "baru:claude" {
+		t.Fatalf("chat 10 model = %q, want baru:claude", got)
+	}
+	if r.GetModel() != "lama:gpt-4o" {
+		t.Fatalf("runner default ikut bermutasi ke %q", r.GetModel())
 	}
 	if !strings.Contains(reply, "baru:claude") {
 		t.Fatalf("reply = %q", reply)
@@ -302,14 +306,95 @@ func TestSlashModelWithConfigResolvesProviderAndAlias(t *testing.T) {
 	if !strings.Contains(switchReply, "claude-sonnet-4-5") {
 		t.Fatalf("switchReply = %q", switchReply)
 	}
-	if r.GetModel() != "claude-sonnet-4-5" || r.ContextWindow != 200000 || r.MaxTokens != 8192 || r.PriceOut != 15.0 {
-		t.Fatalf("runner caps tidak terupdate: model=%q ctx=%d maxTok=%d priceOut=%v", r.GetModel(), r.ContextWindow, r.MaxTokens, r.PriceOut)
+	chat24 := h.runnerForChat(context.Background(), 24)
+	if chat24.GetModel() != "claude-sonnet-4-5" || chat24.ContextWindow != 200000 || chat24.MaxTokens != 8192 || chat24.PriceOut != 15.0 {
+		t.Fatalf("runner chat 24 caps tidak terupdate: model=%q ctx=%d maxTok=%d priceOut=%v", chat24.GetModel(), chat24.ContextWindow, chat24.MaxTokens, chat24.PriceOut)
 	}
-	if r.Provider == nil || r.Provider.Name() != "anthropic" {
-		t.Fatalf("provider tidak berganti ke anthropic: %v", r.Provider)
+	if chat24.Provider == nil || chat24.Provider.Name() != "anthropic" {
+		t.Fatalf("provider chat 24 tidak berganti ke anthropic: %v", chat24.Provider)
+	}
+	if r.GetModel() != "gpt-4o-mini" {
+		t.Fatalf("runner default ikut bermutasi ke %q (harus terisolasi per chat)", r.GetModel())
+	}
+	chat99 := h.runnerForChat(context.Background(), 99)
+	if chat99.GetModel() != "gpt-4o-mini" {
+		t.Fatalf("chat lain ikut bermutasi: got %q", chat99.GetModel())
 	}
 	saved, err := st.GetChatModel(context.Background(), 24)
 	if err != nil || saved != "sonnet" {
 		t.Fatalf("model per chat tidak tersimpan di DB: got=%q err=%v", saved, err)
+	}
+}
+
+func TestMigrateCmdHermesDryRunAndRun(t *testing.T) {
+	hermesDir := t.TempDir()
+	renstraDir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", renstraDir)
+
+	if err := os.MkdirAll(filepath.Join(hermesDir, "memories"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hermesDir, "memories", "MEMORY.md"), []byte("catatan lama"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := migrateCmd([]string{"hermes", "--from", hermesDir, "--dry-run"}); err != nil {
+		t.Fatalf("migrate dry-run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(renstraDir, "memory", "MEMORY.md")); !os.IsNotExist(err) {
+		t.Fatal("dry-run tidak boleh menulis file")
+	}
+
+	if err := migrateCmd([]string{"hermes", "--from", hermesDir}); err != nil {
+		t.Fatalf("migrate hermes: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(renstraDir, "memory", "MEMORY.md"))
+	if err != nil || string(got) != "catatan lama" {
+		t.Fatalf("got=%q err=%v", string(got), err)
+	}
+}
+
+func TestSkillAddFromLocalDirectory(t *testing.T) {
+	renstraDir := t.TempDir()
+	srcDir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", renstraDir)
+
+	skillDir := filepath.Join(srcDir, "my-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: my-skill\ndescription: Skill uji\n---\nIsi panduan.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := skillCmd([]string{"add", skillDir}); err != nil {
+		t.Fatalf("skill add dir: %v", err)
+	}
+	installed, err := os.ReadFile(filepath.Join(renstraDir, "skills", "my-skill", "SKILL.md"))
+	if err != nil || string(installed) != content {
+		t.Fatalf("skill tidak tersalin benar: err=%v got=%q", err, string(installed))
+	}
+}
+
+func TestResolveAuxTarget(t *testing.T) {
+	cfg := &config.Config{
+		Providers: map[string]config.ProviderConfig{
+			"fast": {
+				Kind:         "openai",
+				BaseURL:      "https://api.openai.com/v1",
+				DefaultModel: "gpt-4o-mini",
+				Models: map[string]config.ModelConfig{
+					"gpt-4o-mini": {PriceIn: 0.15, PriceOut: 0.60},
+				},
+			},
+		},
+		Agent: config.Agent{AuxModel: "fast:gpt-4o-mini"},
+	}
+	prov, model, pin, pout, err := resolveAuxTarget(cfg, nil, "main", config.ModelConfig{})
+	if err != nil {
+		t.Fatalf("resolveAuxTarget: %v", err)
+	}
+	if prov == nil || model != "gpt-4o-mini" || pin != 0.15 || pout != 0.60 {
+		t.Fatalf("hasil salah: prov=%v model=%s in=%v out=%v", prov, model, pin, pout)
 	}
 }

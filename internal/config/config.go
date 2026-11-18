@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -55,10 +56,11 @@ type ToolsConfig struct {
 	WebSearch     *bool `yaml:"web_search"`
 	Memory        *bool `yaml:"memory"`
 	Skill         *bool `yaml:"skill"`
-	Cron          *bool `yaml:"cron"`
-	Delegate      *bool `yaml:"delegate"`
-	SessionSearch *bool `yaml:"session_search"`
-	SendFile      *bool `yaml:"send_file"`
+	Cron               *bool `yaml:"cron"`
+	Delegate           *bool `yaml:"delegate"`
+	SessionSearch      *bool `yaml:"session_search"`
+	SendFile           *bool `yaml:"send_file"`
+	AllowPrivateFetch  bool  `yaml:"allow_private_web_fetch"`
 }
 
 type Agent struct {
@@ -68,6 +70,7 @@ type Agent struct {
 	AuxModel           string   `yaml:"aux_model"`
 	AutoCompact        *bool    `yaml:"auto_compact"`
 	CompactThreshold   float64  `yaml:"compact_threshold"`
+	FileRetentionDays  int      `yaml:"file_retention_days"`
 }
 
 type ModelConfig struct {
@@ -185,16 +188,16 @@ func (a ApprovalConfig) Check(toolName string, rawArgs []byte) (decided bool, al
 
 	argStr := string(rawArgs)
 
-	// Check always_denied rules first
+	// Check always_denied rules first (aggressive substring match)
 	for _, rule := range a.AlwaysDenied {
-		if matchRule(rule, toolName, argStr) {
+		if matchDenyRule(rule, toolName, argStr) {
 			return true, false
 		}
 	}
 
-	// Check always_allowed rules next
+	// Check always_allowed rules next (strict prefix/JSON-aware match)
 	for _, rule := range a.AlwaysAllowed {
-		if matchRule(rule, toolName, argStr) {
+		if matchAllowRule(rule, toolName, rawArgs) {
 			return true, true
 		}
 	}
@@ -203,7 +206,7 @@ func (a ApprovalConfig) Check(toolName string, rawArgs []byte) (decided bool, al
 	return false, false
 }
 
-func matchRule(rule, toolName, argStr string) bool {
+func matchDenyRule(rule, toolName, argStr string) bool {
 	rule = strings.TrimSpace(rule)
 	if rule == "" {
 		return false
@@ -215,6 +218,67 @@ func matchRule(rule, toolName, argStr string) bool {
 	if strings.HasPrefix(rule, prefix) {
 		sub := strings.TrimPrefix(rule, prefix)
 		return strings.Contains(argStr, sub)
+	}
+	return false
+}
+
+func matchAllowRule(rule, toolName string, rawArgs []byte) bool {
+	rule = strings.TrimSpace(rule)
+	if rule == "" {
+		return false
+	}
+	if rule == toolName || rule == "*" {
+		return true
+	}
+	prefix := toolName + ":"
+	if !strings.HasPrefix(rule, prefix) {
+		return false
+	}
+	sub := strings.TrimSpace(strings.TrimPrefix(rule, prefix))
+	if sub == "" {
+		return false
+	}
+	if sub == "*" {
+		return true
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(rawArgs, &parsed); err != nil {
+		return false
+	}
+
+	if toolName == "terminal" {
+		cmd, _ := parsed["cmd"].(string)
+		cmd = strings.TrimSpace(cmd)
+		if cmd == "" {
+			return false
+		}
+		if hasShellMeta(cmd) {
+			return false
+		}
+		if strings.HasSuffix(sub, "*") {
+			base := strings.TrimSpace(strings.TrimSuffix(sub, "*"))
+			return base == "" || cmd == base || strings.HasPrefix(cmd, base+" ")
+		}
+		return cmd == sub || strings.HasPrefix(cmd, sub+" ")
+	}
+
+	for _, v := range parsed {
+		if sv, ok := v.(string); ok {
+			sv = strings.TrimSpace(sv)
+			if sv == sub || strings.HasPrefix(sv, sub+" ") || strings.HasPrefix(sv, sub) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasShellMeta(cmd string) bool {
+	for _, tok := range []string{"&&", "||", ";", "|", "`", "$(", ">", "<", "\n", "\r", "#"} {
+		if strings.Contains(cmd, tok) {
+			return true
+		}
 	}
 	return false
 }

@@ -1,16 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -22,6 +28,7 @@ import (
 	"renstra/internal/cron"
 	"renstra/internal/mcp"
 	"renstra/internal/memory"
+	"renstra/internal/migrate"
 	"renstra/internal/provider"
 	"renstra/internal/provider/anthropic"
 	"renstra/internal/provider/google"
@@ -36,6 +43,68 @@ import (
 	"renstra/internal/telegram"
 	"renstra/internal/tool"
 )
+
+func migrateCmd(args []string) error {
+	if len(args) == 0 || args[0] != "hermes" {
+		return fmt.Errorf("pemakaian: renstra migrate hermes [--from <dir>] [--dry-run] [--force]")
+	}
+	var fromDir string
+	var dryRun, force bool
+	rest := args[1:]
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case "--dry-run":
+			dryRun = true
+		case "--force":
+			force = true
+		case "--from":
+			if i+1 >= len(rest) {
+				return fmt.Errorf("--from butuh path direktori")
+			}
+			i++
+			fromDir = rest[i]
+		default:
+			if strings.HasPrefix(rest[i], "--from=") {
+				fromDir = strings.TrimPrefix(rest[i], "--from=")
+			} else {
+				return fmt.Errorf("flag tidak dikenal: %s", rest[i])
+			}
+		}
+	}
+
+	rep, err := migrate.FromHermes(context.Background(), migrate.Options{
+		FromDir: fromDir,
+		ToDir:   config.Home(),
+		DryRun:  dryRun,
+		Force:   force,
+	})
+	if err != nil {
+		return err
+	}
+
+	mode := "SELESAI"
+	if rep.DryRun {
+		mode = "DRY-RUN (tidak ada perubahan ditulis)"
+	}
+	fmt.Printf("Migrasi Hermes -> RENSTRA [%s]\n", mode)
+	fmt.Printf("  Sumber : %s\n", rep.SourceDir)
+	fmt.Printf("  Tujuan : %s\n", rep.DestDir)
+	fmt.Printf("  Config : written=%v\n", rep.ConfigWritten)
+	fmt.Printf("  MCP    : written=%v (servers=%d)\n", rep.MCPWritten, rep.MCPServers)
+	fmt.Printf("  Memory : MEMORY.md=%v, USER.md=%v\n", rep.MemoryCopied, rep.UserCopied)
+	fmt.Printf("  Skills : disalin=%d, dilewati=%d\n", rep.SkillsCopied, rep.SkillsSkipped)
+	fmt.Printf("  History: sesi=%d (dilewati=%d), pesan=%d\n", rep.SessionsCopied, rep.SessionsSkipped, rep.MessagesCopied)
+	if len(rep.EnvVarsFound) > 0 {
+		fmt.Printf("  Env API key ditemukan di .env Hermes (pastikan di-export): %s\n", strings.Join(rep.EnvVarsFound, ", "))
+	}
+	for _, s := range rep.SkippedItems {
+		fmt.Printf("  [lewati] %s\n", s)
+	}
+	for _, w := range rep.Warnings {
+		fmt.Printf("  [peringatan] %s\n", w)
+	}
+	return nil
+}
 
 func mcpCmd(args []string) error {
 	cfgs := loadMCPConfigs()
@@ -170,16 +239,24 @@ func skillCmd(args []string) error {
 		}
 		return nil
 	case "add":
+		dest := instanceDir
+		if global {
+			dest = globalDir
+		}
+		if len(filtered) == 2 {
+			installed, err := installSkillFromSource(filtered[1], dest)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("skill dipasang ke %s: %s\n", dest, strings.Join(installed, ", "))
+			return nil
+		}
 		if len(filtered) < 4 {
-			return fmt.Errorf("pemakaian: renstra skill add <name> <description> <body> [--global]")
+			return fmt.Errorf("pemakaian: renstra skill add <dir|git-url> [--global] ATAU renstra skill add <name> <description> <body> [--global]")
 		}
 		name, desc, body := filtered[1], filtered[2], filtered[3]
 		if err := reg.Create(name, desc, body); err != nil {
 			return err
-		}
-		dest := instanceDir
-		if global {
-			dest = globalDir
 		}
 		fmt.Printf("skill %q disimpan ke %s\n", name, dest)
 		return nil
@@ -248,12 +325,17 @@ func serveCmd() error {
 	home := config.Home()
 	cfgPath := filepath.Join(home, "config.yaml")
 
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
 	// Read Telegram token and allowed_users from config
 	token := cfg.Telegram.Token
 	allowedUsers := cfg.Telegram.AllowedUsers
 
 	if token == "" {
 		return fmt.Errorf("telegram.token belum diset di %s; jalankan `renstra setup`", cfgPath)
+	}
+	if len(allowedUsers) == 0 {
+		logger.Warn("telegram_allowed_users_empty", "hint", "bot akan menolak semua pesan masuk hingga telegram.allowed_users diisi")
 	}
 
 	st, err := store.Open(filepath.Join(home, "state.db"))
@@ -272,6 +354,7 @@ func serveCmd() error {
 
 	workspace := filepath.Join(home, "workspace")
 	_ = os.MkdirAll(workspace, 0o755)
+	pruneRetention(cfg, home, workspace)
 
 	// Seed bot with recently seen updates so a restart never answers twice.
 	_ = st.PruneUpdatesSeen(ctx)
@@ -286,6 +369,7 @@ func serveCmd() error {
 			defer scancel()
 			_ = st.MarkUpdateSeen(sctx, id)
 		},
+		Transcribe: buildTranscriber(cfg),
 	})
 	if err != nil {
 		return err
@@ -319,12 +403,10 @@ func serveCmd() error {
 	}
 
 	mc := pcfg.ModelConfig(model)
-	auxModel := cfg.Agent.AuxModel
-	if auxModel == "" {
-		auxModel = model
+	auxProv, auxModel, auxIn, auxOut, auxErr := resolveAuxTarget(cfg, prov, model, mc)
+	if auxErr != nil {
+		logger.Warn("aux_model_invalid", "aux_model", cfg.Agent.AuxModel, "error", auxErr.Error())
 	}
-
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	runner := &agent.Runner{
 		Provider:           prov,
@@ -332,6 +414,9 @@ func serveCmd() error {
 		Store:              st,
 		Model:              model,
 		AuxModel:           auxModel,
+		AuxProvider:        auxProv,
+		AuxPriceIn:         auxIn,
+		AuxPriceOut:        auxOut,
 		Cwd:                workspace,
 		MaxIters:           cfg.Agent.MaxIterations,
 		MaxTokens:          mc.MaxOutput,
@@ -353,12 +438,20 @@ func serveCmd() error {
 		Logger:             logger,
 	}
 
+	checkpointsDir := filepath.Join(home, "checkpoints")
+	wfTool := tool.NewWriteFile(workspace)
+	wfTool.BackupDir = checkpointsDir
+	patchTool := tool.NewPatch(workspace)
+	patchTool.BackupDir = checkpointsDir
+	webFetchTool := tool.NewWebFetch()
+	webFetchTool.AllowPrivate = cfg.Tools.AllowPrivateFetch
+
 	candidates := []tool.Tool{
 		tool.NewTerminal(workspace, 0),
 		tool.NewReadFile(workspace),
-		tool.NewWriteFile(workspace),
-		tool.NewPatch(workspace),
-		tool.NewWebFetch(),
+		wfTool,
+		patchTool,
+		webFetchTool,
 		tool.NewWebSearch(),
 		tool.NewMemory(memStore),
 		tool.NewSkill(skillReg),
@@ -373,8 +466,10 @@ func serveCmd() error {
 		}
 	}
 
-	// Connect MCP servers
-	mcpServers, mcpErrors := mcp.ConnectAll(ctx, loadMCPConfigs())
+	// Connect MCP servers with startup timeout so an unreachable server never stalls boot.
+	mcpCtx, mcpCancel := context.WithTimeout(ctx, 15*time.Second)
+	mcpServers, mcpErrors := mcp.ConnectAll(mcpCtx, loadMCPConfigs())
+	mcpCancel()
 	for _, s := range mcpServers {
 		defer s.Client.Close()
 		for _, t := range s.Tools {
@@ -414,7 +509,8 @@ func serveCmd() error {
 		logger.Warn("telegram_set_my_commands_failed", "error", err.Error())
 	}
 
-	// Cron runner in background with panic recovery
+	// Cron runner in background with panic recovery and isolated Runner clone.
+	cronRunner := runner.Clone()
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -427,7 +523,7 @@ func serveCmd() error {
 					_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d panic]: %v", job.ID, r))
 				}
 			}()
-			ans, err := runner.Run(agent.WithUnattended(cctx), job.ChatID, job.Prompt)
+			ans, err := cronRunner.Run(agent.WithUnattended(cctx), job.ChatID, job.Prompt)
 			if err != nil {
 				_ = bot.SendMessage(cctx, job.ChatID, fmt.Sprintf("[cron %d error]: %v", job.ID, err))
 				return
@@ -446,6 +542,50 @@ type telegramHandler struct {
 	store           *store.Store
 	cfg             *config.Config
 	approvalTimeout time.Duration
+
+	mu    sync.Mutex
+	chats map[int64]*agent.Runner
+}
+
+func (h *telegramHandler) runnerForChat(ctx context.Context, chatID int64) *agent.Runner {
+	h.mu.Lock()
+	if h.chats == nil {
+		h.chats = map[int64]*agent.Runner{}
+	}
+	cr := h.chats[chatID]
+	if cr != nil {
+		h.mu.Unlock()
+		return cr
+	}
+	cr = h.runner.Clone()
+	h.chats[chatID] = cr
+	h.mu.Unlock()
+
+	if h.store != nil {
+		if savedRef, err := h.store.GetChatModel(ctx, chatID); err == nil && savedRef != "" {
+			if h.cfg != nil && len(h.cfg.Providers) > 0 {
+				if pcfg, model, rerr := config.Resolve(savedRef, h.cfg); rerr == nil {
+					if prov, perr := buildProvider(pcfg); perr == nil {
+						mc := pcfg.ModelConfig(model)
+						cr.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+						cr.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+					}
+				}
+			} else {
+				cr.SetModel(nil, savedRef, 0, 0, 0, 0)
+			}
+		}
+	}
+	return cr
+}
+
+func (h *telegramHandler) invalidateAllPrompts() {
+	h.runner.InvalidatePrompt()
+	h.mu.Lock()
+	for _, cr := range h.chats {
+		cr.InvalidatePrompt()
+	}
+	h.mu.Unlock()
 }
 
 func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string) (reply string, err error) {
@@ -476,7 +616,7 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		if err := h.store.SessionBreak(ctx, chatID); err != nil {
 			return "", fmt.Errorf("gagal reset sesi: %w", err)
 		}
-		h.runner.InvalidatePrompt()
+		h.invalidateAllPrompts()
 		return "Sesi baru dimulai. Catatan memori di-freeze ulang dan riwayat diputus.", nil
 
 	case "/usage":
@@ -530,9 +670,10 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		return fmt.Sprintf("Kompaksi selesai.\nRingkasan konteks:\n%s", summary), nil
 
 	case "/model":
+		cr := h.runnerForChat(ctx, chatID)
 		if arg == "" {
 			var b strings.Builder
-			fmt.Fprintf(&b, "Model aktif saat ini: %s\n", h.runner.GetModel())
+			fmt.Fprintf(&b, "Model aktif saat ini: %s\n", cr.GetModel())
 			if h.cfg != nil && len(h.cfg.Providers) > 0 {
 				b.WriteString("\nProvider & model terkonfigurasi:\n")
 				pnames := make([]string, 0, len(h.cfg.Providers))
@@ -578,15 +719,15 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 				return "", fmt.Errorf("gagal inisialisasi provider untuk %q: %w", arg, err)
 			}
 			mc := pcfg.ModelConfig(model)
-			h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
-			h.runner.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+			cr.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+			cr.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
 			_ = h.store.SetChatModel(ctx, chatID, arg)
 			if arg != model {
 				return fmt.Sprintf("Model aktif diganti ke: %s (%s)", model, arg), nil
 			}
 			return fmt.Sprintf("Model aktif diganti ke: %s", model), nil
 		}
-		h.runner.SetModel(nil, arg, 0, 0, 0, 0)
+		cr.SetModel(nil, arg, 0, 0, 0, 0)
 		_ = h.store.SetChatModel(ctx, chatID, arg)
 		return fmt.Sprintf("Model aktif diganti ke: %s", arg), nil
 
@@ -596,7 +737,7 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		}
 		reloaded := false
 		if strings.EqualFold(arg, "reload") {
-			h.runner.InvalidatePrompt()
+			h.invalidateAllPrompts()
 			reloaded = true
 		}
 		idx := strings.TrimSpace(h.runner.Skills.Index())
@@ -640,30 +781,21 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		return h.handleCronCmd(ctx, chatID, arg)
 	}
 
-	if h.cfg != nil && len(h.cfg.Providers) > 0 {
-		if savedRef, merr := h.store.GetChatModel(ctx, chatID); merr == nil && savedRef != "" {
-			if pcfg, model, rerr := config.Resolve(savedRef, h.cfg); rerr == nil && model != h.runner.GetModel() {
-				if prov, perr := buildProvider(pcfg); perr == nil {
-					mc := pcfg.ModelConfig(model)
-					h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
-					h.runner.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
-				}
-			}
-		}
-	}
+	cr := h.runnerForChat(ctx, chatID)
 
 	if h.bot != nil {
-		sw := telegram.NewStreamWriter(h.bot, chatID)
+		sw := telegram.NewStreamWriterWithContext(ctx, h.bot, chatID)
+		defer sw.Cancel()
 		ctx = agent.WithStreamWriter(ctx, sw)
 		ctx = agent.WithToolHook(ctx, sw.OnTool)
-		reply, err = h.runner.Run(ctx, chatID, text)
+		reply, err = cr.Run(ctx, chatID, text)
 		if err == nil && sw.Finalize(ctx, reply) {
 			return "", nil
 		}
 		return reply, err
 	}
 
-	return h.runner.Run(ctx, chatID, text)
+	return cr.Run(ctx, chatID, text)
 }
 
 func (h *telegramHandler) handleCronCmd(ctx context.Context, chatID int64, arg string) (string, error) {
@@ -822,4 +954,233 @@ func buildFallbacks(cfg *config.Config) []agent.FallbackTarget {
 		})
 	}
 	return targets
+}
+
+func resolveAuxTarget(cfg *config.Config, primaryProv provider.Provider, primaryModel string, primaryMC config.ModelConfig) (provider.Provider, string, float64, float64, error) {
+	if cfg == nil || strings.TrimSpace(cfg.Agent.AuxModel) == "" {
+		return primaryProv, primaryModel, primaryMC.PriceIn, primaryMC.PriceOut, nil
+	}
+	auxPCfg, auxModel, err := config.Resolve(cfg.Agent.AuxModel, cfg)
+	if err != nil {
+		return primaryProv, primaryModel, primaryMC.PriceIn, primaryMC.PriceOut, err
+	}
+	auxProv, err := buildProvider(auxPCfg)
+	if err != nil {
+		return primaryProv, primaryModel, primaryMC.PriceIn, primaryMC.PriceOut, err
+	}
+	auxMC := auxPCfg.ModelConfig(auxModel)
+	return auxProv, auxModel, auxMC.PriceIn, auxMC.PriceOut, nil
+}
+
+func pruneRetention(cfg *config.Config, home, workspace string) {
+	days := 14
+	if cfg != nil && cfg.Agent.FileRetentionDays > 0 {
+		days = cfg.Agent.FileRetentionDays
+	} else if cfg != nil && cfg.Agent.FileRetentionDays < 0 {
+		return
+	}
+	maxAge := time.Duration(days) * 24 * time.Hour
+	for _, dir := range []string{
+		filepath.Join(workspace, "inbox"),
+		filepath.Join(workspace, ".tool-output"),
+		filepath.Join(home, "checkpoints"),
+	} {
+		_, _ = tool.PruneOldFiles(dir, maxAge)
+	}
+}
+
+func buildTranscriber(cfg *config.Config) func(context.Context, string) (string, error) {
+	if cfg == nil {
+		return nil
+	}
+	var baseURL, apiKey, model string
+	for _, p := range cfg.Providers {
+		kind := strings.ToLower(strings.TrimSpace(p.Kind))
+		if kind != "openai" && kind != "groq" && kind != "" {
+			continue
+		}
+		key := ""
+		if p.APIKeyEnv != "" {
+			key = os.Getenv(p.APIKeyEnv)
+		}
+		if key == "" && kind == "openai" {
+			key = os.Getenv("OPENAI_API_KEY")
+		}
+		if key == "" && kind == "groq" {
+			key = os.Getenv("GROQ_API_KEY")
+		}
+		if key == "" {
+			continue
+		}
+		baseURL = strings.TrimRight(p.BaseURL, "/")
+		if baseURL == "" {
+			if kind == "groq" {
+				baseURL = "https://api.groq.com/openai/v1"
+			} else {
+				baseURL = "https://api.openai.com/v1"
+			}
+		}
+		apiKey = key
+		if kind == "groq" {
+			model = "whisper-large-v3-turbo"
+		} else {
+			model = "whisper-1"
+		}
+		break
+	}
+	if apiKey == "" {
+		return nil
+	}
+	return func(ctx context.Context, audioPath string) (string, error) {
+		return transcribeAudioFile(ctx, baseURL, apiKey, model, audioPath)
+	}
+}
+
+func transcribeAudioFile(ctx context.Context, baseURL, apiKey, model, audioPath string) (string, error) {
+	data, err := os.ReadFile(audioPath)
+	if err != nil {
+		return "", err
+	}
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", filepath.Base(audioPath))
+	if err != nil {
+		return "", err
+	}
+	if _, err := fw.Write(data); err != nil {
+		return "", err
+	}
+	if err := mw.WriteField("model", model); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/audio/transcriptions", &body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", fmt.Errorf("transcribe HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.Text), nil
+}
+
+func installSkillFromSource(src, destDir string) ([]string, error) {
+	src = strings.TrimSpace(src)
+	if src == "" {
+		return nil, fmt.Errorf("sumber skill kosong")
+	}
+	isGit := strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") ||
+		strings.HasPrefix(src, "git@") || strings.HasSuffix(src, ".git")
+	sourceRoot := src
+	if isGit {
+		tmp, err := os.MkdirTemp("", "renstra-skill-*")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(tmp)
+		cmd := exec.Command("git", "clone", "--depth", "1", src, tmp)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("git clone %s gagal: %w (%s)", src, err, strings.TrimSpace(string(out)))
+		}
+		sourceRoot = tmp
+	}
+
+	info, err := os.Stat(sourceRoot)
+	if err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("direktori skill tidak ditemukan: %s", src)
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return nil, err
+	}
+
+	var candidates []string
+	if _, err := os.Stat(filepath.Join(sourceRoot, "SKILL.md")); err == nil {
+		candidates = append(candidates, sourceRoot)
+	} else {
+		for _, searchDir := range []string{sourceRoot, filepath.Join(sourceRoot, "skills")} {
+			entries, rerr := os.ReadDir(searchDir)
+			if rerr != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+					continue
+				}
+				sub := filepath.Join(searchDir, e.Name())
+				if _, serr := os.Stat(filepath.Join(sub, "SKILL.md")); serr == nil {
+					candidates = append(candidates, sub)
+				}
+			}
+			if len(candidates) > 0 {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("tidak ditemukan SKILL.md di %s", src)
+	}
+
+	var installed []string
+	for _, cand := range candidates {
+		name := filepath.Base(cand)
+		target := filepath.Join(destDir, name)
+		if err := copySkillTree(cand, target); err != nil {
+			return nil, err
+		}
+		installed = append(installed, name)
+	}
+	sort.Strings(installed)
+	return installed, nil
+}
+
+func copySkillTree(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		if d.Name() == ".git" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }

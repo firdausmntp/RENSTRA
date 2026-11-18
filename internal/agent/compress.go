@@ -44,6 +44,25 @@ func ShouldCompact(msgs []provider.Message, window int, threshold float64) bool 
 	return float64(EstimateTokens(msgs)) > float64(window)*threshold
 }
 
+// EstimateRequestTokens estimates tokens across the system prompt, tool
+// schemas/descriptions, and conversation history.
+func EstimateRequestTokens(sysPrompt string, tools []provider.ToolDef, msgs []provider.Message) int {
+	bytes := len(sysPrompt)
+	for _, d := range tools {
+		bytes += len(d.Name) + len(d.Description) + len(d.Schema)
+	}
+	return bytes/4 + EstimateTokens(msgs)
+}
+
+// ShouldCompactRequest reports whether the full request (system prompt +
+// tool definitions + conversation history) has crossed the threshold.
+func ShouldCompactRequest(sysPrompt string, tools []provider.ToolDef, msgs []provider.Message, window int, threshold float64) bool {
+	if window <= 0 {
+		return false
+	}
+	return float64(EstimateRequestTokens(sysPrompt, tools, msgs)) > float64(window)*threshold
+}
+
 // CompactHistory replaces everything except the last keep messages with one
 // summary message. Tool-call groups are never split: the cut point walks back
 // until it lands on a user message, so an assistant(tool_calls) is always
