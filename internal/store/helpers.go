@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -231,4 +232,48 @@ func (s *Store) GetChatModel(ctx context.Context, chatID int64) (string, error) 
 		return "", nil
 	}
 	return model, err
+}
+
+// ---- Per-chat approval mode persistence ----
+
+// SetChatApprovalMode saves the approval mode ("prompt", "auto", "deny") for a chat.
+func (s *Store) SetChatApprovalMode(ctx context.Context, chatID int64, mode string) error {
+	key := fmt.Sprintf("approval_mode:%d", chatID)
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)`, key, mode)
+	return err
+}
+
+// GetChatApprovalMode returns the saved approval mode for a chat, or "" if unset.
+func (s *Store) GetChatApprovalMode(ctx context.Context, chatID int64) (string, error) {
+	key := fmt.Sprintf("approval_mode:%d", chatID)
+	var mode string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM kv WHERE key = ?`, key).Scan(&mode)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return mode, err
+}
+
+// ---- Per-chat runtime settings persistence ----
+
+// SetChatSettings saves JSON-encoded runtime overrides for a chat (or deletes on empty).
+func (s *Store) SetChatSettings(ctx context.Context, chatID int64, rawJSON string) error {
+	key := fmt.Sprintf("chat_settings:%d", chatID)
+	if rawJSON == "" {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM kv WHERE key = ?`, key)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)`, key, rawJSON)
+	return err
+}
+
+// GetChatSettings returns the saved JSON-encoded runtime overrides for a chat, or "".
+func (s *Store) GetChatSettings(ctx context.Context, chatID int64) (string, error) {
+	key := fmt.Sprintf("chat_settings:%d", chatID)
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM kv WHERE key = ?`, key).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return raw, err
 }

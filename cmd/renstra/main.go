@@ -21,7 +21,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.2.0"
+var version = "v1.2.5"
 
 func main() {
 	args := os.Args[1:]
@@ -78,30 +78,40 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "help", "-h", "--help":
+		cli.PrintCLIUsage(os.Stdout, detectLang(args[1:]), version)
 	case "version", "-v", "--version":
 		fmt.Println("renstra", version)
 	default:
-		fmt.Fprintf(os.Stderr, "perintah tidak dikenal: %s\n", args[0])
-		usage()
+		fmt.Fprintf(os.Stderr, "perintah tidak dikenal: %s\n\n", args[0])
+		cli.PrintCLIUsage(os.Stderr, detectLang(args[1:]), version)
+		os.Exit(2)
 	}
 }
 
+func detectLang(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--lang" || args[i] == "-l") && i+1 < len(args) {
+			if strings.EqualFold(args[i+1], "en") {
+				return "en"
+			}
+			return "id"
+		}
+		if strings.HasPrefix(args[i], "--lang=") {
+			if strings.EqualFold(strings.TrimPrefix(args[i], "--lang="), "en") {
+				return "en"
+			}
+			return "id"
+		}
+	}
+	if strings.EqualFold(os.Getenv("RENSTRA_LANG"), "en") {
+		return "en"
+	}
+	return "id"
+}
+
 func usage() {
-	fmt.Fprintln(os.Stderr, `pemakaian renstra:
-  renstra setup                      wizard konfigurasi awal (token bot, key, dll)
-  renstra serve                      jalankan gateway Telegram + cron
-  renstra chat [model]               sesi chat interaktif di CLI
-  renstra update [check]             perbarui binary renstra ke versi rilis terbaru
-  renstra migrate hermes [flags]     impor memori, skill, config & riwayat dari ~/.hermes
-  renstra model list                 daftar provider aktif
-  renstra skill list [--global]      lihat skill terdaftar
-  renstra skill add <dir|url>        impor skill dari direktori atau git URL
-  renstra skill add <n> <d> <b>      tambah skill baru secara langsung
-  renstra skill rm <n> [--global]    hapus skill
-  renstra mcp list                   daftar server MCP terdaftar
-  renstra usage                      laporan pemakaian token & biaya
-  renstra config path                lokasi direktori data (~/.renstra)
-  renstra version                    tampilkan versi binary`)
+	cli.PrintCLIUsage(os.Stderr, detectLang(nil), version)
 	os.Exit(2)
 }
 
@@ -204,6 +214,8 @@ func chatCmd(args []string) error {
 	)
 
 	checkpointsDir := filepath.Join(home, "checkpoints")
+	_ = os.MkdirAll(filepath.Join(workspace, "tmp"), 0o755)
+	pruneRetention(cfg, home, workspace)
 	wfTool := tool.NewWriteFile(workspace)
 	wfTool.BackupDir = checkpointsDir
 	patchTool := tool.NewPatch(workspace)

@@ -249,7 +249,7 @@ func TestReplApprovalSharesReader(t *testing.T) {
 	if !executed {
 		t.Fatalf("tool tidak dieksekusi padahal diapprove y:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "jalankan danger?") {
+	if !strings.Contains(out.String(), "Konfirmasi Eksekusi:") || !strings.Contains(out.String(), "Setujui? [y/N]") {
 		t.Fatalf("prompt approval tidak tampil:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "selesai") {
@@ -290,5 +290,19 @@ func TestReplTurnFooterShowsStats(t *testing.T) {
 	// Teks tidak boleh dobel (Out runner harus bisu saat CLI streaming).
 	if strings.Count(got, "jawaban akhir") != 1 {
 		t.Fatalf("teks stream terduplikasi:\n%s", got)
+	}
+}
+
+func TestHelpSupportsEnglishAndIndonesian(t *testing.T) {
+	s := newStore(t)
+	r := &agent.Runner{Provider: &fakeProvider{}, Tools: tool.NewRegistry(), Store: s, Model: "m", Cwd: t.TempDir()}
+	in := strings.NewReader("/help\n/lang en\n/help\n/help id\n/exit\n")
+	var out bytes.Buffer
+	if err := cli.Run(context.Background(), r, 1, in, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "Perintah RENSTRA CLI") || !strings.Contains(got, "RENSTRA CLI Commands") {
+		t.Fatalf("output /help harus mendukung id & en:\n%s", got)
 	}
 }

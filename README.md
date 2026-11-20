@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.0-blue.svg?style=flat-square&logo=github" alt="Version v1.2.0" /></a>
+  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.5-blue.svg?style=flat-square&logo=github" alt="Version v1.2.5" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
   <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.4%20Rich%20Messages-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.4" />
@@ -208,6 +208,8 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 | `/restart` | ⚡ **Restart sesi seketika**: Memutus konteks lama & membatalkan proses/turn yang sedang berjalan di chat saat itu secara aman |
 | `/new` atau `/reset` | Memulai sesi baru (memutus riwayat aktif dan membekukan ulang snapshot memori) |
 | `/stop` | Menghentikan turn atau eksekusi tool yang sedang aktif berjalan di chat ini |
+| `/approval [prompt\|auto\|deny]` | Mengatur mode persetujuan tool (konfirmasi tombol, auto-approve, atau tolak) secara persisten per chat |
+| `/config [key val]` | Mengubah pengaturan default (`auto_compact`, `compact_threshold`, `max_iterations`, `turn_timeout`, `warn_usd`, `max_usd`, `prompt_prefix`, `reset`) via tombol atau teks |
 | `/model` | Melihat model aktif, provider yang terpasang, dan daftar alias |
 | `/model <nama>` | Mengganti model aktif secara instan (contoh: `/model claude-3-5-sonnet` atau `/model groq:llama-3.3-70b`) |
 | `/skills` | Menampilkan katalog skill yang sedang dimuat beserta lapisan sumbernya |
@@ -269,6 +271,7 @@ $RENSTRA_HOME/
 ├── checkpoints/          # Backup checkpoint otomatis sebelum operasi write_file / patch
 └── workspace/            # Direktori kerja default untuk terminal & manipulasi berkas
     ├── inbox/            # Foto dan dokumen yang dikirimkan user via Telegram
+    ├── tmp/              # Script bantu & file hasil sementara (auto-prune sesuai retensi)
     ├── .skills/          # Skill lokal proyek (read-only)
     └── .tool-output/     # Spill output tool jika ukuran melebihi 30 KB
 ```

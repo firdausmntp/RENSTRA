@@ -22,4 +22,7 @@ func TestBuildPromptIncludesMemoryWhenPresent(t *testing.T) {
 	if !strings.Contains(p, "user suka kopi") || !strings.Contains(p, "nama: Budi") {
 		t.Fatal("memory tidak di-inject")
 	}
+	if !strings.Contains(p, "tmp/") {
+		t.Fatal("aturan folder tmp/ tidak ada di system prompt")
+	}
 }

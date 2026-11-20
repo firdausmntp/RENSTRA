@@ -97,6 +97,18 @@ func (r *Registry) Get(name string) (Skill, bool) {
 
 // Index mengembalikan daftar ringkas "nama: deskripsi", satu per baris,
 // diurutkan berdasarkan nama untuk injeksi system prompt yang stabil.
+// Names mengembalikan daftar nama skill terurut.
+func (r *Registry) Names() []string {
+	r.mu.RLock()
+	names := make([]string, 0, len(r.skills))
+	for name := range r.skills {
+		names = append(names, name)
+	}
+	r.mu.RUnlock()
+	sort.Strings(names)
+	return names
+}
+
 func (r *Registry) Index() string {
 	r.mu.RLock()
 	names := make([]string, 0, len(r.skills))

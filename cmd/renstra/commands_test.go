@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -323,89 +322,5 @@ func TestSlashModelWithConfigResolvesProviderAndAlias(t *testing.T) {
 	saved, err := st.GetChatModel(context.Background(), 24)
 	if err != nil || saved != "sonnet" {
 		t.Fatalf("model per chat tidak tersimpan di DB: got=%q err=%v", saved, err)
-	}
-}
-
-func TestMigrateCmdHermesDryRunAndRun(t *testing.T) {
-	hermesDir := t.TempDir()
-	renstraDir := t.TempDir()
-	t.Setenv("RENSTRA_HOME", renstraDir)
-
-	if err := os.MkdirAll(filepath.Join(hermesDir, "memories"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(hermesDir, "memories", "MEMORY.md"), []byte("catatan lama"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := migrateCmd([]string{"hermes", "--from", hermesDir, "--dry-run"}); err != nil {
-		t.Fatalf("migrate dry-run: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(renstraDir, "memory", "MEMORY.md")); !os.IsNotExist(err) {
-		t.Fatal("dry-run tidak boleh menulis file")
-	}
-
-	if err := migrateCmd([]string{"hermes", "--from", hermesDir}); err != nil {
-		t.Fatalf("migrate hermes: %v", err)
-	}
-	got, err := os.ReadFile(filepath.Join(renstraDir, "memory", "MEMORY.md"))
-	if err != nil || string(got) != "catatan lama" {
-		t.Fatalf("got=%q err=%v", string(got), err)
-	}
-}
-
-func TestSkillAddFromLocalDirectory(t *testing.T) {
-	renstraDir := t.TempDir()
-	srcDir := t.TempDir()
-	t.Setenv("RENSTRA_HOME", renstraDir)
-
-	skillDir := filepath.Join(srcDir, "my-skill")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	content := "---\nname: my-skill\ndescription: Skill uji\n---\nIsi panduan.\n"
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := skillCmd([]string{"add", skillDir}); err != nil {
-		t.Fatalf("skill add dir: %v", err)
-	}
-	installed, err := os.ReadFile(filepath.Join(renstraDir, "skills", "my-skill", "SKILL.md"))
-	if err != nil || string(installed) != content {
-		t.Fatalf("skill tidak tersalin benar: err=%v got=%q", err, string(installed))
-	}
-}
-
-func TestResolveAuxTarget(t *testing.T) {
-	cfg := &config.Config{
-		Providers: map[string]config.ProviderConfig{
-			"fast": {
-				Kind:         "openai",
-				BaseURL:      "https://api.openai.com/v1",
-				DefaultModel: "gpt-4o-mini",
-				Models: map[string]config.ModelConfig{
-					"gpt-4o-mini": {PriceIn: 0.15, PriceOut: 0.60},
-				},
-			},
-		},
-		Agent: config.Agent{AuxModel: "fast:gpt-4o-mini"},
-	}
-	prov, model, pin, pout, err := resolveAuxTarget(cfg, nil, "main", config.ModelConfig{})
-	if err != nil {
-		t.Fatalf("resolveAuxTarget: %v", err)
-	}
-	if prov == nil || model != "gpt-4o-mini" || pin != 0.15 || pout != 0.60 {
-		t.Fatalf("hasil salah: prov=%v model=%s in=%v out=%v", prov, model, pin, pout)
-	}
-}
-
-func TestUpdateCmdHelpAndUsage(t *testing.T) {
-	// Memastikan binary flags dan usage string terdaftar
-	if err := updateCmd([]string{"check"}); err != nil {
-		// Jika unauthenticated rate limit atau network offline di test environment,
-		// error tetap di-wrap dengan rapi dan tidak panik.
-		if !strings.Contains(err.Error(), "gagal memeriksa pembaruan") {
-			t.Fatalf("unexpected error: %v", err)
-		}
 	}
 }

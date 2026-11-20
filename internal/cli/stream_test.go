@@ -141,3 +141,22 @@ func TestPrintBannerAlignment(t *testing.T) {
 		t.Fatal("banner kosong")
 	}
 }
+
+func TestCLIStreamWriterLoadingPauseResume(t *testing.T) {
+	var buf bytes.Buffer
+	w := newCLIStreamWriter(&buf, 32000, true)
+	w.StartLoading()
+	time.Sleep(150 * time.Millisecond)
+	w.Pause()
+	w.Resume()
+	w.Write([]byte("jawaban"))
+	w.Finalize()
+
+	got := buf.String()
+	if !strings.Contains(got, "Menghubungi model...") {
+		t.Fatalf("loading message tidak tampil: %q", got)
+	}
+	if !strings.Contains(got, "jawaban") {
+		t.Fatalf("teks jawaban hilang: %q", got)
+	}
+}

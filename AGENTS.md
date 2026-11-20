@@ -184,14 +184,33 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.2.0)
+## 7. Status Rilis & Pengembangan (v1.2.5)
 
-Fitur v1.2.0 telah diimplementasikan:
+Fitur v1.2.5 telah diimplementasikan:
+1. **CLI Lebih Berwarna & Animated Loading Spinner:** `cliStreamWriter` menampilkan spinner animasi (`⠋⠙⠹...`) dan pesan status (`Menghubungi model...`, `Menjalankan <tool>...`), indikator konteks berwarna (hijau/kuning/merah), serta pause/resume otomatis saat konfirmasi approval CLI.
+2. **Approval Mode & Auto-Approve di Telegram & CLI (`/approval`):** Mendukung pergantian mode approval per chat (`prompt`, `auto`, `deny`) yang persisten di SQLite (`kv`), lengkap dengan tombol cepat `⚡ Auto-Approve Chat Ini` pada keyboard inline Telegram.
+3. **Desain Ulang Pesan Approval Telegram:** Pesan konfirmasi tool kini dirender dengan format HTML rapi (ekstraksi perintah `terminal` ke blok `<pre><code class="language-bash">`, pretty-print JSON untuk tool lain, badge status `✅`/`❌`/`⚡`/`⌛`/`🛑`).
+
+Fitur v1.2.0 sebelumnya:
 1. **Pesan Awal Telegram `/start` & `/help`:** Diformat rapi dan elegan sesuai pembaruan Telegram Bot API 10.4.
-2. **Modernisasi Chat UI CLI (`renstra chat`):** Tampilan welcome banner informatif (versi, provider asli, model, context window, skills count), prompt visual interaktif (`╭─ User` dan `╭─ RENSTRA (<model>)`).
-3. **In-Place Self-Updater (`renstra update`):** Pembaruan otomatis binary langsung dari GitHub Releases (`firdausmntp/RENSTRA`) dengan progress bar dan replacement binary yang aman di Linux, macOS, dan Windows.
+2. **Modernisasi Chat UI CLI (`renstra chat`):** Tampilan welcome banner informatif, prompt visual interaktif, status bar live streaming.
+3. **In-Place Self-Updater (`renstra update`):** Pembaruan otomatis binary langsung dari GitHub Releases (`firdausmntp/RENSTRA`).
 4. **Notifikasi Rilis Baru:** Deteksi non-blocking versi rilis baru dengan cache TTL 12 jam.
-5. **One-Line Bash Installer:** Script [`install.sh`](install.sh) via `curl -fsSL https://raw.githubusercontent.com/firdausmntp/RENSTRA/main/install.sh | bash` untuk instalasi cepat di VPS (Ubuntu, Debian, Armbian, CentOS, macOS).
-6. **Error Formatter Rapi & Elegan:** Parsing HTTP status code (401, 403, 404, 429, 500), URL provider, dan JSON body menjadi pesan Telegram (dengan `<blockquote>` Bot API 10.4) dan ANSI boxed panel di CLI beserta tips solusi langkah demi langkah.
-7. **Peningkatan Setup & Auto-Load `.env`:** Wizard `renstra setup` memungkinkan input API Key langsung ke `$RENSTRA_HOME/.env` (mode `0600`), dan `config.Load()` memuat file `.env` secara otomatis.
+5. **One-Line Bash Installer:** Script [`install.sh`](install.sh) untuk instalasi cepat di VPS.
+6. **Error Formatter Rapi & Elegan:** Parsing HTTP status code dan rendering `<blockquote>` Telegram / ANSI box CLI.
+7. **Peningkatan Setup & Auto-Load `.env`:** Wizard `renstra setup` menyimpan API Key ke `$RENSTRA_HOME/.env` (mode `0600`).
 Lihat daftar perbaikan lengkap di [TODO.md](TODO.md).
+
+---
+
+## 8. Aturan Commit, Tag & Riwayat Rilis (Wajib)
+
+Untuk menjaga keterlacakan perubahan di repositori, setiap commit dan tag rilis wajib mengikuti standar berikut:
+
+1. **Detail di Setiap Commit (`git commit`):**
+   - Gunakan format Conventional Commits pada baris subjek (`feat:`, `fix:`, `refactor:`, `docs:`, `release:`).
+   - Wajib sertakan **commit body yang detail** berisi daftar perubahan per komponen/paket, alasan teknis, serta status pengujian (`go test`, `go vet`). Hindari commit satu baris tanpa konteks.
+2. **Annotated Tag dengan Riwayat Lengkap (`git tag -a`):**
+   - Dilarang membuat lightweight tag untuk rilis. Selalu gunakan *annotated tag* (`git tag -a vX.Y.Z`) yang memuat ringkasan rilis, poin fitur baru, perbaikan bug, dan catatan penting.
+3. **Sinkronisasi Catatan Rilis:**
+   - Setiap kali menyiapkan tag rilis baru, perbarui daftar perubahan di [`TODO.md`](TODO.md) dan bagian status di `AGENTS.md` / [`README.md`](README.md) sebelum commit dan tag dibuat.

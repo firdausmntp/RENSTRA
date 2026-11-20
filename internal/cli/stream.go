@@ -10,41 +10,115 @@ import (
 
 // ANSI color codes for CLI rendering.
 const (
-	cReset   = "\033[0m"
-	cDim     = "\033[0;2m"
-	cCyan    = "\033[1;36m"
-	cMagenta = "\033[1;35m"
-	cYellow  = "\033[1;33m"
-	cGreen   = "\033[1;32m"
-	cWhite   = "\033[1;37m"
+	cReset         = "\033[0m"
+	cDim           = "\033[0;2m"
+	cCyan          = "\033[1;36m"
+	cBrightCyan    = "\033[1;96m"
+	cMagenta       = "\033[1;35m"
+	cBrightMagenta = "\033[1;95m"
+	cYellow        = "\033[1;33m"
+	cGreen         = "\033[1;32m"
+	cBlue          = "\033[1;34m"
+	cRed           = "\033[1;31m"
+	cWhite         = "\033[1;37m"
 )
 
-// cliStreamWriter renders streamed assistant text with a live status line
-// (elapsed time, running tool, context usage). It is attached per turn via
-// agent.WithStreamWriter / agent.WithToolHook; the runner's plain Out stays
-// io.Discard in CLI mode so text is never double-written.
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// cliStreamWriter renders streamed assistant text with an animated loading
+// spinner and live status line (elapsed time, running tool, context usage).
 type cliStreamWriter struct {
 	mu          sync.Mutex
 	out         io.Writer
 	start       time.Time
 	toolCalls   int
 	toolNote    string
+	loadingMsg  string
+	spinIdx     int
 	atLineStart bool
 	statusOn    bool
+	paused      bool
 	closed      bool
 	interactive bool
 	contextWin  int
 	contextUsed int
+
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	doneCh   chan struct{}
+	started  bool
 }
 
 func newCLIStreamWriter(out io.Writer, contextWin int, interactive bool) *cliStreamWriter {
 	return &cliStreamWriter{
 		out:         out,
 		start:       time.Now(),
+		loadingMsg:  "Menghubungi model...",
 		atLineStart: true,
 		contextWin:  contextWin,
 		interactive: interactive,
 	}
+}
+
+// StartLoading begins the animated spinner status line when interactive.
+func (w *cliStreamWriter) StartLoading() {
+	if !w.interactive {
+		return
+	}
+	w.mu.Lock()
+	if w.started || w.closed {
+		w.mu.Unlock()
+		return
+	}
+	w.started = true
+	w.stopCh = make(chan struct{})
+	w.doneCh = make(chan struct{})
+	w.renderStatusLocked()
+	w.mu.Unlock()
+
+	go func() {
+		defer close(w.doneCh)
+		ticker := time.NewTicker(120 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-w.stopCh:
+				return
+			case <-ticker.C:
+				w.mu.Lock()
+				if !w.closed && !w.paused {
+					w.spinIdx = (w.spinIdx + 1) % len(spinnerFrames)
+					w.clearStatusLocked()
+					w.renderStatusLocked()
+				}
+				w.mu.Unlock()
+			}
+		}
+	}()
+}
+
+// Pause temporarily hides the live status/spinner (e.g. during an approval prompt).
+func (w *cliStreamWriter) Pause() {
+	if !w.interactive {
+		return
+	}
+	w.mu.Lock()
+	w.paused = true
+	w.clearStatusLocked()
+	w.mu.Unlock()
+}
+
+// Resume restores the live status/spinner after Pause.
+func (w *cliStreamWriter) Resume() {
+	if !w.interactive {
+		return
+	}
+	w.mu.Lock()
+	w.paused = false
+	if !w.closed {
+		w.renderStatusLocked()
+	}
+	w.mu.Unlock()
 }
 
 // Write renders one streamed text delta and refreshes the status line.
@@ -58,6 +132,7 @@ func (w *cliStreamWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	w.toolNote = ""
+	w.loadingMsg = ""
 	if !w.interactive {
 		// Piped/redirected output: plain passthrough, no live status line.
 		w.out.Write(p)
@@ -67,7 +142,9 @@ func (w *cliStreamWriter) Write(p []byte) (int, error) {
 	w.clearStatusLocked()
 	w.out.Write(p)
 	w.atLineStart = strings.HasSuffix(string(p), "\n")
-	w.renderStatusLocked()
+	if !w.paused {
+		w.renderStatusLocked()
+	}
 	return len(p), nil
 }
 
@@ -80,6 +157,7 @@ func (w *cliStreamWriter) OnTool(name, args string) {
 	}
 	w.toolCalls++
 	w.toolNote = "⚙ " + name
+	w.loadingMsg = "Menjalankan " + name + "..."
 	if !w.interactive {
 		if !w.atLineStart {
 			fmt.Fprintln(w.out)
@@ -93,11 +171,26 @@ func (w *cliStreamWriter) OnTool(name, args string) {
 		fmt.Fprintln(w.out)
 		w.atLineStart = true
 	}
-	w.renderStatusLocked()
+	if !w.paused {
+		w.renderStatusLocked()
+	}
 }
 
-// Finalize erases the status line and leaves the cursor on a fresh line.
+// Finalize stops any active spinner, erases the status line, and leaves the cursor on a fresh line.
 func (w *cliStreamWriter) Finalize() {
+	w.mu.Lock()
+	started := w.started
+	stopCh := w.stopCh
+	doneCh := w.doneCh
+	w.mu.Unlock()
+
+	if started && stopCh != nil {
+		w.stopOnce.Do(func() { close(stopCh) })
+		if doneCh != nil {
+			<-doneCh
+		}
+	}
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.closed = true
@@ -115,9 +208,7 @@ func (w *cliStreamWriter) SetContextUsage(used int) {
 	w.contextUsed = used
 }
 
-// clearStatusLocked erases the status line when one is on screen. The cursor
-// always sits at the end of the status line (or of the streamed text), so a
-// carriage return + erase-line is enough; no cursor-up gymnastics.
+// clearStatusLocked erases the status line when one is on screen using saved cursor position.
 func (w *cliStreamWriter) clearStatusLocked() {
 	if w.statusOn {
 		fmt.Fprint(w.out, "\033[u\033[K")
@@ -131,18 +222,31 @@ func (w *cliStreamWriter) renderStatusLocked() {
 }
 
 func (w *cliStreamWriter) statusLineLocked() string {
-	parts := []string{"⏱ " + formatDuration(time.Since(w.start))}
-	if w.toolNote != "" {
-		parts = append(parts, w.toolNote)
+	var parts []string
+	if w.loadingMsg != "" {
+		frame := spinnerFrames[w.spinIdx%len(spinnerFrames)]
+		parts = append(parts, cBrightCyan+frame+cReset+" "+cWhite+w.loadingMsg+cReset)
+	}
+	parts = append(parts, cDim+"⏱ "+formatDuration(time.Since(w.start))+cReset)
+	if w.toolNote != "" && w.loadingMsg == "" {
+		parts = append(parts, cYellow+w.toolNote+cReset)
+	} else if w.toolNote != "" {
+		parts = append(parts, cYellow+w.toolNote+cReset)
 	}
 	if w.toolCalls > 0 {
-		parts = append(parts, fmt.Sprintf("%d tool", w.toolCalls))
+		parts = append(parts, cCyan+fmt.Sprintf("%d tool", w.toolCalls)+cReset)
 	}
 	if w.contextWin > 0 && w.contextUsed > 0 {
 		pct := float64(w.contextUsed) / float64(w.contextWin) * 100
-		parts = append(parts, fmt.Sprintf("ctx %.0f%%", pct))
+		ctxColor := cGreen
+		if pct >= 80 {
+			ctxColor = cRed
+		} else if pct >= 50 {
+			ctxColor = cYellow
+		}
+		parts = append(parts, ctxColor+fmt.Sprintf("ctx %.0f%%", pct)+cReset)
 	}
-	return cDim + strings.Join(parts, " │ ") + cReset
+	return strings.Join(parts, cDim+" │ "+cReset)
 }
 
 func formatDuration(d time.Duration) string {

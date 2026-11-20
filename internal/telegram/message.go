@@ -96,6 +96,8 @@ const helpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
 	"💬 **Sesi & Kontrol**\n" +
 	"• `/new`, `/reset`, atau `/restart` — mulai sesi baru; riwayat diputus, memori di-freeze ulang\n" +
 	"• `/stop` — hentikan tugas yang sedang berjalan\n" +
+	"• `/approval [prompt|auto|deny]` — atur mode persetujuan eksekusi tool\n" +
+	"• `/config [key val]` — ubah pengaturan default (auto_compact, threshold, max_iters, timeout, limits, prompt)\n" +
 	"• `/status` — ringkasan status sesi, model, konteks & biaya\n" +
 	"• `/compact` — ringkas riwayat sekarang supaya konteks lega\n\n" +
 	"🧠 **Model & Kecerdasan**\n" +

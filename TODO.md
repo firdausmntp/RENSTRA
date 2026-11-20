@@ -4,6 +4,23 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.2.5 (CLI Spinner & Warna, Telegram Approval Mode & Rich Approval Card)
+
+- [x] **CLI Lebih Berwarna & Animated Loading Spinner**
+  - **Lokasi:** [`internal/cli/stream.go`](internal/cli/stream.go), [`internal/cli/repl.go`](internal/cli/repl.go), [`internal/cli/approve.go`](internal/cli/approve.go)
+  - **Peningkatan:** Menambahkan animasi Braille spinner (`⠋⠙⠹...`) dan pesan status live (`Menghubungi model...`, `Menjalankan <tool>...`), indikator pemakaian konteks berwarna (hijau/kuning/merah), kotak konfirmasi CLI berwarna dengan ekstraksi `cmd`, serta mekanisme `Pause`/`Resume` spinner saat konfirmasi user.
+- [x] **Perintah `/approval [prompt|auto|deny]` & Auto-Approve Persisten per Chat**
+  - **Lokasi:** [`internal/store/helpers.go`](internal/store/helpers.go), [`internal/agent/runner.go`](internal/agent/runner.go), [`cmd/renstra/commands.go`](cmd/renstra/commands.go), [`internal/cli/repl.go`](internal/cli/repl.go)
+  - **Fitur:** Menambahkan perintah `/approval` di Telegram dan CLI untuk mengganti mode persetujuan secara langsung (`prompt`, `auto`, `deny`) dan menyimpannya per chat di SQLite (`kv`).
+- [x] **Perbaikan Tampilan Pesan Approval Telegram & Tombol Cepat Auto-Approve**
+  - **Lokasi:** [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/telegram/message.go`](internal/telegram/message.go)
+  - **Peningkatan:** Mengganti teks JSON mentah menjadi kartu konfirmasi HTML terstruktur (`🔐 Konfirmasi Eksekusi`, blok `<pre><code class="language-bash">` untuk `terminal`, pretty-print JSON untuk tool lain), status hasil terformat (`✅`/`❌`/`⚡`/`⌛`/`🛑`), serta tombol inline `⚡ Auto-Approve Chat Ini`.
+- [x] **Standar Detail Commit & Tag History di `AGENTS.md`**
+  - **Lokasi:** [`AGENTS.md`](AGENTS.md)
+  - **Peningkatan:** Menetapkan aturan wajib commit body detail dan annotated tag dengan riwayat perubahan lengkap.
+
+---
+
 ## Rilis v1.2.0 (UX Chat UI, Self-Update & One-Line Installer)
 
 - [x] **Desain Ulang Pesan Awal Telegram `/start` & `/help` (Telegram Bot API 10.4)**

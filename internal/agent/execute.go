@@ -1,0 +1,264 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"renstra/internal/provider"
+	"renstra/internal/tool"
+)
+
+func (r *Runner) approvalCheck(toolName string, rawArgs []byte) (bool, bool) {
+	r.mu.Lock()
+	cfg := r.ApprovalCfg
+	r.mu.Unlock()
+	return cfg.Check(toolName, rawArgs)
+}
+
+func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res string) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			res = fmt.Sprintf("panic di tool %s: %v", call.Name, rec)
+		}
+	}()
+
+	t, ok := r.Tools.Get(call.Name)
+	if !ok {
+		return "tool tidak dikenal: " + call.Name
+	}
+	if !json.Valid([]byte(call.Arguments)) {
+		return "argumen tool tidak valid: bukan JSON"
+	}
+	if hook := toolHookFrom(ctx); hook != nil {
+		hook(call.Name, call.Arguments)
+	}
+	if isUnattended(ctx) && strings.HasPrefix(call.Name, "mcp__") {
+		return "ditolak: tool MCP tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
+	}
+	if t.Danger() {
+		chatID := tool.ChatIDFrom(ctx)
+		if decided, allowed := r.approvalCheck(call.Name, []byte(call.Arguments)); decided {
+			if r.Logger != nil {
+				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "config", "allowed", allowed)
+			}
+			if !allowed {
+				return "ditolak: aturan approval konfigurasi menolak perintah ini"
+			}
+		} else {
+			if isUnattended(ctx) {
+				if r.Logger != nil {
+					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "unattended", "allowed", false)
+				}
+				return "ditolak: perintah berbahaya tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
+			}
+			if r.Approve == nil {
+				if r.Logger != nil {
+					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "no_approver", "allowed", false)
+				}
+				return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
+			}
+			allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
+			if r.Logger != nil {
+				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "interactive", "allowed", allowed, "err", err)
+			}
+			if err != nil {
+				return "approval gagal: " + err.Error()
+			}
+			if !allowed {
+				return "ditolak user"
+			}
+		}
+	}
+
+	out, err := t.Execute(ctx, json.RawMessage(call.Arguments))
+	if err != nil {
+		return "error: " + err.Error()
+	}
+	if call.Name == "memory" || call.Name == "skill" {
+		r.invalidatePrompt()
+	}
+	truncated, terr := tool.Truncate(out, maxToolOutput, r.Cwd, call.ID)
+	if terr != nil {
+		return out
+	}
+	return truncated
+}
+
+func (r *Runner) recordUsage(u *provider.Usage) {
+	r.recordUsageWithPrices(u, r.PriceIn, r.PriceOut)
+}
+
+func (r *Runner) recordUsageWithPrices(u *provider.Usage, priceIn, priceOut float64) {
+	cost := (float64(u.InputTokens)/1e6)*priceIn + (float64(u.OutputTokens)/1e6)*priceOut
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	_ = r.Store.RecordUsage(ctx, time.Now().Format("2006-01-02"), int64(u.InputTokens), int64(u.OutputTokens), cost)
+}
+
+func (r *Runner) savePartial(chatID int64, text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	_, _ = r.Store.AppendMessage(ctx, chatID, provider.Message{Role: provider.RoleAssistant, Content: text})
+}
+
+func (r *Runner) fillCancelledTools(chatID int64, remaining []provider.ToolCall) {
+	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+	defer cancel()
+	for _, call := range remaining {
+		_, _ = r.Store.AppendMessage(ctx, chatID, provider.Message{
+			Role:       provider.RoleTool,
+			Content:    "dibatalkan sebelum dijalankan",
+			ToolCallID: call.ID,
+		})
+	}
+}
+
+func (r *Runner) appendWithFallback(ctx context.Context, chatID int64, m provider.Message) (int64, error) {
+	id, err := r.Store.AppendMessage(ctx, chatID, m)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		saveCtx, cancel := context.WithTimeout(context.Background(), saveTimeout)
+		defer cancel()
+		return r.Store.AppendMessage(saveCtx, chatID, m)
+	}
+	return id, err
+}
+
+func (r *Runner) system() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cachedPrompt == "" {
+		params := BuildParams{
+			Cwd:          r.Cwd,
+			Model:        r.Model,
+			Tools:        r.Tools.Defs(),
+			PromptPrefix: r.PromptPrefix,
+		}
+		if r.Memory != nil {
+			snap := r.Memory.Snapshot()
+			params.Memory = snap.Memory
+			params.UserProfile = snap.User
+		}
+		if r.Skills != nil {
+			params.SkillIndex = r.Skills.Index()
+		}
+		r.cachedPrompt = BuildPrompt(params)
+	}
+	return r.cachedPrompt
+}
+
+func (r *Runner) InvalidatePrompt() {
+	if r.Skills != nil {
+		_ = r.Skills.Reload()
+	}
+	r.invalidatePrompt()
+}
+
+func (r *Runner) invalidatePrompt() {
+	r.mu.Lock()
+	r.cachedPrompt = ""
+	r.mu.Unlock()
+}
+
+// RunSubagent fulfills tool.SubagentRunner.
+func (r *Runner) RunSubagent(ctx context.Context, task string) (string, error) {
+	if r.SubagentCall != nil {
+		return r.SubagentCall(ctx, task)
+	}
+	primary := r.primaryTarget()
+	childTools := r.Tools
+	if r.Tools != nil {
+		childTools = r.Tools.Clone()
+	}
+	child := &Runner{
+		Provider:           primary.Provider,
+		Tools:              childTools,
+		Store:              r.Store,
+		Model:              primary.Model,
+		AuxModel:           r.AuxModel,
+		AuxProvider:        r.AuxProvider,
+		AuxPriceIn:         r.AuxPriceIn,
+		AuxPriceOut:        r.AuxPriceOut,
+		Cwd:                r.Cwd,
+		MaxIters:           15,
+		MaxTokens:          primary.MaxTokens,
+		PriceIn:            primary.PriceIn,
+		PriceOut:           primary.PriceOut,
+		ContextWindow:      primary.ContextWindow,
+		Vision:             primary.Vision,
+		ToolsDisabled:      primary.ToolsDisabled,
+		Depth:              r.Depth + 1,
+		AutoCompact:        r.AutoCompact,
+		DisableAutoCompact: r.DisableAutoCompact,
+		Threshold:          r.Threshold,
+		PromptPrefix:       r.PromptPrefix,
+		ApprovalCfg:        r.ApprovalCfg,
+		Fallbacks:          r.Fallbacks,
+		Logger:             r.Logger,
+		Memory:             r.Memory,
+		Skills:             r.Skills,
+		Approve:            r.Approve,
+		Out:                io.Discard,
+	}
+	if childTools != nil {
+		if _, ok := childTools.Get("delegate"); ok {
+			childTools.Add(tool.NewDelegate(child, child.Depth))
+		}
+	}
+	subID := time.Now().UnixNano()
+	return child.Run(ctx, subID, task)
+}
+
+func extractImageAttachments(text string) []provider.Attachment {
+	var out []provider.Attachment
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		var path string
+		if strings.HasPrefix(line, "[Foto diterima: ") {
+			rest := strings.TrimPrefix(line, "[Foto diterima: ")
+			end := strings.Index(rest, "]")
+			if end > 0 {
+				path = strings.TrimSpace(rest[:end])
+			}
+		} else if strings.HasPrefix(line, "[File diterima: ") {
+			rest := strings.TrimPrefix(line, "[File diterima: ")
+			end := strings.Index(rest, "]")
+			if end > 0 {
+				candidate := strings.TrimSpace(rest[:end])
+				if idx := strings.Index(candidate, " (mime:"); idx > 0 {
+					candidate = strings.TrimSpace(candidate[:idx])
+				}
+				ext := strings.ToLower(filepath.Ext(candidate))
+				if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif" {
+					path = candidate
+				}
+			}
+		}
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		mime := "image/jpeg"
+		switch strings.ToLower(filepath.Ext(path)) {
+		case ".png":
+			mime = "image/png"
+		case ".webp":
+			mime = "image/webp"
+		case ".gif":
+			mime = "image/gif"
+		}
+		out = append(out, provider.Attachment{Path: path, MimeType: mime})
+	}
+	return out
+}
