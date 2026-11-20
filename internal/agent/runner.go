@@ -31,6 +31,31 @@ const (
 type streamWriterKey struct{}
 type toolHookKey struct{}
 type unattendedKey struct{}
+type turnStatsKey struct{}
+
+// TurnStats receives per-turn metrics when attached via WithTurnStats.
+// It is filled by Runner.Run just before returning (including on error or
+// cancel), so the CLI can render tokens, speed, context usage, and cost.
+type TurnStats struct {
+	TokensIn      int
+	TokensOut     int
+	ToolCalls     int
+	Iterations    int
+	ContextUsed   int // best estimate of request tokens after the turn
+	ContextWindow int
+	CostUSD       float64
+	Elapsed       time.Duration
+}
+
+// WithTurnStats attaches a stats sink for the turn.
+func WithTurnStats(ctx context.Context, s *TurnStats) context.Context {
+	return context.WithValue(ctx, turnStatsKey{}, s)
+}
+
+func turnStatsFrom(ctx context.Context) *TurnStats {
+	s, _ := ctx.Value(turnStatsKey{}).(*TurnStats)
+	return s
+}
 
 // WithStreamWriter attaches a per-turn writer for streaming delta text.
 func WithStreamWriter(ctx context.Context, w io.Writer) context.Context {
@@ -286,6 +311,9 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 	}
 	turnStarted := time.Now()
 	var turnTokensIn, turnTokensOut, turnToolCalls int
+	var turnCost float64
+	var lastUsageIn int
+	iterCount := 0
 	defer func() {
 		status := "done"
 		errMsg := ""
@@ -295,6 +323,29 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 				status = "interrupted"
 			} else {
 				status = "error"
+			}
+		}
+		if stats := turnStatsFrom(ctx); stats != nil {
+			stats.TokensIn = turnTokensIn
+			stats.TokensOut = turnTokensOut
+			stats.ToolCalls = turnToolCalls
+			stats.Iterations = iterCount
+			stats.CostUSD = turnCost
+			stats.Elapsed = time.Since(turnStarted)
+			win := r.primaryTarget().ContextWindow
+			if win <= 0 {
+				win = 32000
+			}
+			stats.ContextWindow = win
+			// Provider-reported input tokens are the most accurate context
+			// occupancy; fall back to the byte estimate when absent.
+			stats.ContextUsed = lastUsageIn
+			if stats.ContextUsed == 0 {
+				var defs []provider.ToolDef
+				if r.Tools != nil {
+					defs = r.Tools.Defs()
+				}
+				stats.ContextUsed = EstimateRequestTokens(r.system(), defs, history)
 			}
 		}
 		if r.Logger != nil && chatID > 0 && chatID < 1_000_000_000_000_000 {
@@ -333,6 +384,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 	var repeatCount int
 
 	for i := 0; i < maxIters; i++ {
+		iterCount = i + 1
 		primary := r.primaryTarget()
 		win := primary.ContextWindow
 		if win <= 0 {
@@ -389,6 +441,8 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		if usage != nil {
 			turnTokensIn += usage.InputTokens
 			turnTokensOut += usage.OutputTokens
+			lastUsageIn = usage.InputTokens
+			turnCost += (float64(usage.InputTokens)/1e6)*res.priceIn + (float64(usage.OutputTokens)/1e6)*res.priceOut
 			r.recordUsageWithPrices(usage, res.priceIn, res.priceOut)
 		}
 		turnToolCalls += len(calls)
@@ -673,16 +727,30 @@ func extractImageAttachments(text string) []provider.Attachment {
 	var out []provider.Attachment
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
-		const prefix = "[Foto diterima: "
-		if !strings.HasPrefix(line, prefix) {
+		var path string
+		if strings.HasPrefix(line, "[Foto diterima: ") {
+			rest := strings.TrimPrefix(line, "[Foto diterima: ")
+			end := strings.Index(rest, "]")
+			if end > 0 {
+				path = strings.TrimSpace(rest[:end])
+			}
+		} else if strings.HasPrefix(line, "[File diterima: ") {
+			rest := strings.TrimPrefix(line, "[File diterima: ")
+			end := strings.Index(rest, "]")
+			if end > 0 {
+				candidate := strings.TrimSpace(rest[:end])
+				if idx := strings.Index(candidate, " (mime:"); idx > 0 {
+					candidate = strings.TrimSpace(candidate[:idx])
+				}
+				ext := strings.ToLower(filepath.Ext(candidate))
+				if ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".webp" || ext == ".gif" {
+					path = candidate
+				}
+			}
+		}
+		if path == "" {
 			continue
 		}
-		rest := strings.TrimPrefix(line, prefix)
-		end := strings.Index(rest, "]")
-		if end <= 0 {
-			continue
-		}
-		path := strings.TrimSpace(rest[:end])
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}

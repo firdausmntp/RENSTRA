@@ -28,6 +28,7 @@ func setupCmd() error {
 	defBase, defKeyEnv, defModel := providerDefaults(providerKind)
 	baseURL := promptString(reader, "Provider Base URL (kosong = bawaan provider)", defBase)
 	apiKeyEnv := promptString(reader, "Nama env variable untuk API key", defKeyEnv)
+	apiKeyVal := promptString(reader, fmt.Sprintf("Nilai API key untuk %s (bisa diisi sekarang atau nanti via .env)", apiKeyEnv), "")
 	defaultModel := promptString(reader, "Model default", defModel)
 	allowedUserStr := promptString(reader, "Telegram User ID kamu (angka, pisahkan koma)", "")
 	approvalMode := promptString(reader, "Mode approval (prompt / auto / deny)", "prompt")
@@ -139,10 +140,50 @@ func setupCmd() error {
 		return err
 	}
 
+	envPath := filepath.Join(home, ".env")
+	if apiKeyVal != "" {
+		if err := saveEnvVar(envPath, apiKeyEnv, apiKeyVal); err != nil {
+			fmt.Printf("Peringatan: gagal menyimpan API key ke .env: %v\n", err)
+		} else {
+			_ = os.Setenv(apiKeyEnv, apiKeyVal)
+		}
+	}
+
 	fmt.Printf("\nConfig berhasil dibuat! (%s)\n", cfgPath)
-	fmt.Printf("Jangan lupa set env: %s\n", apiKeyEnv)
-	fmt.Println("Jalankan `renstra serve` untuk menyalakan bot Telegram.")
+	if apiKeyVal != "" {
+		fmt.Printf("API Key berhasil disimpan dengan aman ke %s\n", envPath)
+	} else {
+		fmt.Printf("Catatan: Jangan lupa set environment variable %s atau isi ke %s\n", apiKeyEnv, envPath)
+	}
+	fmt.Println("Jalankan `renstra serve` untuk menyalakan bot Telegram, atau `renstra chat` untuk CLI.")
 	return nil
+}
+
+// saveEnvVar updates or appends a key=value pair to the specified .env file.
+func saveEnvVar(path, key, val string) error {
+	var lines []string
+	found := false
+	if raw, err := os.ReadFile(path); err == nil {
+		scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+		for scanner.Scan() {
+			line := scanner.Text()
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "export ") {
+				trimmed = strings.TrimSpace(strings.TrimPrefix(trimmed, "export "))
+			}
+			if strings.HasPrefix(trimmed, key+"=") {
+				lines = append(lines, fmt.Sprintf("%s=%q", key, val))
+				found = true
+			} else {
+				lines = append(lines, line)
+			}
+		}
+	}
+	if !found {
+		lines = append(lines, fmt.Sprintf("%s=%q", key, val))
+	}
+	content := strings.Join(lines, "\n") + "\n"
+	return os.WriteFile(path, []byte(content), 0o600)
 }
 
 // yamlQuote renders a string as a YAML double-quoted scalar so a token that

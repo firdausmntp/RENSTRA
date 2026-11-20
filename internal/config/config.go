@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,19 +49,19 @@ type TelegramConfig struct {
 }
 
 type ToolsConfig struct {
-	Terminal      *bool `yaml:"terminal"`
-	ReadFile      *bool `yaml:"read_file"`
-	WriteFile     *bool `yaml:"write_file"`
-	Patch         *bool `yaml:"patch"`
-	WebFetch      *bool `yaml:"web_fetch"`
-	WebSearch     *bool `yaml:"web_search"`
-	Memory        *bool `yaml:"memory"`
-	Skill         *bool `yaml:"skill"`
-	Cron               *bool `yaml:"cron"`
-	Delegate           *bool `yaml:"delegate"`
-	SessionSearch      *bool `yaml:"session_search"`
-	SendFile           *bool `yaml:"send_file"`
-	AllowPrivateFetch  bool  `yaml:"allow_private_web_fetch"`
+	Terminal          *bool `yaml:"terminal"`
+	ReadFile          *bool `yaml:"read_file"`
+	WriteFile         *bool `yaml:"write_file"`
+	Patch             *bool `yaml:"patch"`
+	WebFetch          *bool `yaml:"web_fetch"`
+	WebSearch         *bool `yaml:"web_search"`
+	Memory            *bool `yaml:"memory"`
+	Skill             *bool `yaml:"skill"`
+	Cron              *bool `yaml:"cron"`
+	Delegate          *bool `yaml:"delegate"`
+	SessionSearch     *bool `yaml:"session_search"`
+	SendFile          *bool `yaml:"send_file"`
+	AllowPrivateFetch bool  `yaml:"allow_private_web_fetch"`
 }
 
 type Agent struct {
@@ -87,6 +88,7 @@ type ProviderConfig struct {
 	APIStyle     string                 `yaml:"api_style"`
 	BaseURL      string                 `yaml:"base_url"`
 	Path         string                 `yaml:"path"`
+	APIKey       string                 `yaml:"api_key"`
 	APIKeyEnv    string                 `yaml:"api_key_env"`
 	Headers      map[string]string      `yaml:"headers"`
 	Proxy        string                 `yaml:"proxy"`
@@ -304,7 +306,45 @@ func (a Agent) Threshold() float64 {
 	return t
 }
 
+// LoadDotEnv reads key-value pairs from a .env file and sets them in the
+// process environment if not already defined. It ignores comments and empty lines.
+func LoadDotEnv(path string) error {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(raw), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+		idx := strings.Index(line, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		if os.Getenv(key) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
+	return nil
+}
+
 func Load() (*Config, error) {
+	// Auto-load .env from Home() and current directory if present.
+	_ = LoadDotEnv(filepath.Join(Home(), ".env"))
+	_ = LoadDotEnv(".env")
+
 	cfg := defaults()
 	path := filepath.Join(Home(), "config.yaml")
 	raw, err := os.ReadFile(path)
@@ -344,7 +384,7 @@ func Resolve(ref string, cfg *Config) (ProviderConfig, string, error) {
 		ref = target
 	}
 	if ref == "" {
-		return ProviderConfig{}, "", errors.New("model belum diset")
+		return ProviderConfig{}, "", errors.New("model belum diset; jalankan `renstra setup` atau pilih model dengan `renstra chat <provider>:<model>`")
 	}
 
 	providerName, model := ref, ""
@@ -354,10 +394,14 @@ func Resolve(ref string, cfg *Config) (ProviderConfig, string, error) {
 
 	p, ok := cfg.Providers[providerName]
 	if !ok {
+		if len(cfg.Providers) == 0 {
+			return ProviderConfig{}, "", fmt.Errorf("provider %q tidak ditemukan dan belum ada provider terkonfigurasi; jalankan `renstra setup`", providerName)
+		}
 		names := make([]string, 0, len(cfg.Providers))
 		for n := range cfg.Providers {
 			names = append(names, n)
 		}
+		sort.Strings(names)
 		return ProviderConfig{}, "", fmt.Errorf("provider %q tidak dikenal (tersedia: %s)", providerName, strings.Join(names, ", "))
 	}
 	if model == "" {

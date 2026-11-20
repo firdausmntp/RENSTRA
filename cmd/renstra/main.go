@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"renstra/internal/agent"
@@ -15,9 +18,10 @@ import (
 	"renstra/internal/skill"
 	"renstra/internal/store"
 	"renstra/internal/tool"
+	"renstra/internal/update"
 )
 
-var version = "v1.1.0"
+var version = "v1.2.0"
 
 func main() {
 	args := os.Args[1:]
@@ -37,6 +41,11 @@ func main() {
 		}
 	case "chat":
 		if err := chatCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "update":
+		if err := updateCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -82,6 +91,7 @@ func usage() {
   renstra setup                      wizard konfigurasi awal (token bot, key, dll)
   renstra serve                      jalankan gateway Telegram + cron
   renstra chat [model]               sesi chat interaktif di CLI
+  renstra update [check]             perbarui binary renstra ke versi rilis terbaru
   renstra migrate hermes [flags]     impor memori, skill, config & riwayat dari ~/.hermes
   renstra model list                 daftar provider aktif
   renstra skill list [--global]      lihat skill terdaftar
@@ -104,22 +114,54 @@ func configCmd(args []string) {
 	os.Exit(2)
 }
 
+// modelListText renders configured providers, their models, and aliases for
+// the CLI /model listing (mirrors the Telegram /model output).
+func modelListText(cfg *config.Config) string {
+	if cfg == nil || (len(cfg.Providers) == 0 && len(cfg.Aliases) == 0) {
+		return ""
+	}
+	var b strings.Builder
+	if len(cfg.Providers) > 0 {
+		b.WriteString("\nProvider & model terkonfigurasi:\n")
+		pnames := make([]string, 0, len(cfg.Providers))
+		for n := range cfg.Providers {
+			pnames = append(pnames, n)
+		}
+		sort.Strings(pnames)
+		for _, pn := range pnames {
+			pc := cfg.Providers[pn]
+			kind := pc.Kind
+			if kind == "" {
+				kind = "openai"
+			}
+			fmt.Fprintf(&b, "  %-12s (%s) default=%s", pn, kind, pc.DefaultModel)
+			if len(pc.Models) > 0 {
+				mnames := make([]string, 0, len(pc.Models))
+				for mn := range pc.Models {
+					mnames = append(mnames, mn)
+				}
+				sort.Strings(mnames)
+				fmt.Fprintf(&b, " [%s]", strings.Join(mnames, ", "))
+			}
+			b.WriteString("\n")
+		}
+	}
+	if len(cfg.Aliases) > 0 {
+		b.WriteString("\nAlias:\n")
+		anames := make([]string, 0, len(cfg.Aliases))
+		for a := range cfg.Aliases {
+			anames = append(anames, a)
+		}
+		sort.Strings(anames)
+		for _, a := range anames {
+			fmt.Fprintf(&b, "  %-12s -> %s\n", a, cfg.Aliases[a])
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func chatCmd(args []string) error {
 	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
-
-	ref := cfg.DefaultModel
-	if len(args) > 0 {
-		ref = args[0]
-	}
-	pcfg, model, err := config.Resolve(ref, cfg)
-	if err != nil {
-		return err
-	}
-
-	prov, err := buildProvider(pcfg)
 	if err != nil {
 		return err
 	}
@@ -136,6 +178,22 @@ func chatCmd(args []string) error {
 		return err
 	}
 	defer st.Close()
+
+	ref := cfg.DefaultModel
+	if len(args) > 0 {
+		ref = args[0]
+	} else if saved, err := st.GetChatModel(context.Background(), 1); err == nil && saved != "" {
+		ref = saved
+	}
+	pcfg, model, err := config.Resolve(ref, cfg)
+	if err != nil {
+		return err
+	}
+
+	prov, err := buildProvider(pcfg)
+	if err != nil {
+		return err
+	}
 
 	memStore, _ := memory.Open(filepath.Join(home, "memory"))
 	skillReg, _ := skill.Load(
@@ -214,10 +272,32 @@ func chatCmd(args []string) error {
 	if cfg.Tools.IsEnabled("delegate") {
 		r.Tools.Add(tool.NewDelegate(r, 0))
 	}
-	fmt.Printf("renstra — %s (%s). /help untuk bantuan.\n\n", model, filepath.Base(pcfg.BaseURL))
+
+	var updateMsg string
+	if rel, isNewer := update.CheckCachedUpdate(home, version, 12*time.Hour); isNewer && rel != nil {
+		updateMsg = fmt.Sprintf("Versi baru tersedia: %s (kamu: %s). Jalankan `renstra update` untuk memperbarui.", rel.TagName, version)
+	}
+
+	provKind := pcfg.Kind
+	if provKind == "" {
+		provKind = "openai"
+	}
+
+	cli.PrintBanner(os.Stdout, r, cli.RunOptions{
+		Version:    version,
+		Provider:   provKind,
+		UpdateInfo: updateMsg,
+	})
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	return cli.RunWithOptions(ctx, r, 1, os.Stdin, os.Stdout, cli.RunOptions{
+		Version:   version,
+		Provider:  provKind,
+		ModelList: func() string { return modelListText(cfg) },
+		BindApprover: func(rd *bufio.Reader) {
+			r.Approve = cli.ApproverFrom(rd, os.Stdout)
+		},
 		SwitchModel: func(ref string) (string, error) {
 			nextPCfg, nextModel, err := config.Resolve(ref, cfg)
 			if err != nil {
@@ -230,6 +310,7 @@ func chatCmd(args []string) error {
 			nextMC := nextPCfg.ModelConfig(nextModel)
 			r.SetModel(nextProv, nextModel, nextMC.MaxOutput, nextMC.Context, nextMC.PriceIn, nextMC.PriceOut)
 			r.SetCapabilities(nextMC.Vision, nextMC.Tools != nil && !*nextMC.Tools)
+			_ = st.SetChatModel(context.Background(), 1, nextModel)
 			return fmt.Sprintf("Model aktif diganti ke: %s", nextModel), nil
 		},
 	})

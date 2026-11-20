@@ -74,6 +74,9 @@ internal/memory/
 internal/migrate/
   hermes.go        # Impor data dari Hermes Agent (~/.hermes) ke $RENSTRA_HOME (`renstra migrate hermes`)
 
+internal/update/
+  update.go        # Self-updater in-place dari GitHub releases (`renstra update`), cache check, multi-OS binary replacement
+
 internal/cron/
   cron.go          # Parser cron 5-field + @hourly/@daily/@weekly, NextAfter, Run ticker tanpa backfill
 
@@ -181,6 +184,14 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.1.0)
+## 7. Status Rilis & Pengembangan (v1.2.0)
 
-Fitur v1.1.0 telah diimplementasikan (seluruh daftar hardening keamanan, concurrency/reliabilitas, migrasi `renstra migrate hermes`, paritas REPL CLI, import skill `<dir|git-url>`, checkpoint backup & retensi file, serta dukungan ke-8 provider + prompted tools + multimodal vision & transkripsi suara). Lihat arsitektur rencana awal di [docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md](docs/superpowers/plans/2026-11-15-renstra-agent-roadmap.md) dan daftar perbaikan di [TODO.md](TODO.md).
+Fitur v1.2.0 telah diimplementasikan:
+1. **Pesan Awal Telegram `/start` & `/help`:** Diformat rapi dan elegan sesuai pembaruan Telegram Bot API 10.4.
+2. **Modernisasi Chat UI CLI (`renstra chat`):** Tampilan welcome banner informatif (versi, provider asli, model, context window, skills count), prompt visual interaktif (`╭─ User` dan `╭─ RENSTRA (<model>)`).
+3. **In-Place Self-Updater (`renstra update`):** Pembaruan otomatis binary langsung dari GitHub Releases (`firdausmntp/RENSTRA`) dengan progress bar dan replacement binary yang aman di Linux, macOS, dan Windows.
+4. **Notifikasi Rilis Baru:** Deteksi non-blocking versi rilis baru dengan cache TTL 12 jam.
+5. **One-Line Bash Installer:** Script [`install.sh`](install.sh) via `curl -fsSL https://raw.githubusercontent.com/firdausmntp/RENSTRA/main/install.sh | bash` untuk instalasi cepat di VPS (Ubuntu, Debian, Armbian, CentOS, macOS).
+6. **Error Formatter Rapi & Elegan:** Parsing HTTP status code (401, 403, 404, 429, 500), URL provider, dan JSON body menjadi pesan Telegram (dengan `<blockquote>` Bot API 10.4) dan ANSI boxed panel di CLI beserta tips solusi langkah demi langkah.
+7. **Peningkatan Setup & Auto-Load `.env`:** Wizard `renstra setup` memungkinkan input API Key langsung ke `$RENSTRA_HOME/.env` (mode `0600`), dan `config.Load()` memuat file `.env` secara otomatis.
+Lihat daftar perbaikan lengkap di [TODO.md](TODO.md).

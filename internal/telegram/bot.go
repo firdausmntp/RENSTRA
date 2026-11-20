@@ -301,7 +301,10 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 	}
 
 	switch command(text) {
-	case "/start", "/help":
+	case "/start":
+		b.reply(ctx, m.Chat.ID, startText)
+		return
+	case "/help":
 		b.reply(ctx, m.Chat.ID, helpText)
 		return
 	case "/stop":
@@ -364,7 +367,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		if m.Document != nil {
 			saved, err := b.DownloadFile(turnCtx, m.Document.FileID, inbox, m.Document.FileName)
 			if err != nil {
-				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh dokumen: "+err.Error())
+				b.reply(ctx, m.Chat.ID, FormatError(fmt.Errorf("gagal mengunduh dokumen: %w", err)))
 				return
 			}
 			if m.Document.MimeType != "" {
@@ -382,7 +385,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 			}
 			saved, err := b.DownloadFile(turnCtx, best.FileID, inbox, "")
 			if err != nil {
-				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh foto: "+err.Error())
+				b.reply(ctx, m.Chat.ID, FormatError(fmt.Errorf("gagal mengunduh foto: %w", err)))
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Foto diterima: %s]", saved))
@@ -390,7 +393,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		if m.Voice != nil {
 			saved, err := b.DownloadFile(turnCtx, m.Voice.FileID, inbox, "voice.ogg")
 			if err != nil {
-				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh voice note: "+err.Error())
+				b.reply(ctx, m.Chat.ID, FormatError(fmt.Errorf("gagal mengunduh voice note: %w", err)))
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Voice diterima: %s (durasi: %ds, mime: %s)]", saved, m.Voice.Duration, m.Voice.MimeType))
@@ -407,7 +410,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 			}
 			saved, err := b.DownloadFile(turnCtx, m.Audio.FileID, inbox, name)
 			if err != nil {
-				b.reply(ctx, m.Chat.ID, "error: gagal mengunduh audio: "+err.Error())
+				b.reply(ctx, m.Chat.ID, FormatError(fmt.Errorf("gagal mengunduh audio: %w", err)))
 				return
 			}
 			notes = append(notes, fmt.Sprintf("[Audio diterima: %s (durasi: %ds, mime: %s)]", saved, m.Audio.Duration, m.Audio.MimeType))
@@ -427,10 +430,14 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 
 	out, err := h.Handle(turnCtx, m.Chat.ID, text)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
+			b.reply(ctx, m.Chat.ID, FormatError(err))
+			return
+		}
 		if turnCtx.Err() != nil {
 			return
 		}
-		b.reply(ctx, m.Chat.ID, "error: "+err.Error())
+		b.reply(ctx, m.Chat.ID, FormatError(err))
 		return
 	}
 	b.reply(ctx, m.Chat.ID, out)
@@ -444,6 +451,11 @@ func (b *Bot) handleCallback(ctx context.Context, cq callbackQuery) {
 		return
 	}
 	chatID := cq.Message.Chat.ID
+	if len(b.allowed) > 0 && cq.From.ID > 0 {
+		if _, ok := b.allowed[cq.From.ID]; !ok {
+			return
+		}
+	}
 
 	b.mu.Lock()
 	p := b.pending[id]
@@ -514,7 +526,7 @@ func (b *Bot) SendRichMessageDraft(ctx context.Context, chatID, draftID int64, m
 		return errors.New("telegram: teks kosong")
 	}
 	_, err := b.post(ctx, "sendRichMessageDraft", map[string]any{
-		"chat_id": chatID,
+		"chat_id":  chatID,
 		"draft_id": draftID,
 		"rich_message": map[string]any{
 			"markdown": markdown,
@@ -586,16 +598,20 @@ type BotCommand struct {
 // DefaultCommands returns the slash command menu registered by renstra serve.
 func DefaultCommands() []BotCommand {
 	return []BotCommand{
-		{Command: "help", Description: "Tampilkan bantuan perintah"},
+		{Command: "start", Description: "Mulai & tampilkan sambutan"},
+		{Command: "help", Description: "Panduan lengkap semua perintah"},
 		{Command: "new", Description: "Mulai sesi baru (potong riwayat lama)"},
+		{Command: "restart", Description: "Restart sesi & potong riwayat lama"},
 		{Command: "stop", Description: "Hentikan tugas yang sedang berjalan"},
 		{Command: "model", Description: "Cek atau ganti model aktif"},
 		{Command: "skills", Description: "Daftar skill aktif (/skills reload)"},
 		{Command: "memory", Description: "Lihat catatan memori & profil user"},
 		{Command: "cron", Description: "Kelola jadwal otomatis"},
+		{Command: "status", Description: "Info status sesi, model, konteks & biaya"},
 		{Command: "usage", Description: "Cek token & estimasi biaya hari ini"},
 		{Command: "insights", Description: "Ringkasan pemakaian harian, 7 & 30 hari"},
 		{Command: "compact", Description: "Kompaksi ringkasan riwayat sekarang"},
+		{Command: "version", Description: "Tampilkan versi binary RENSTRA"},
 	}
 }
 
@@ -689,12 +705,23 @@ func (b *Bot) EditMessage(ctx context.Context, chatID int64, messageID int64, te
 		"text":       markdownToHTML(text),
 		"parse_mode": "HTML",
 	})
-	if isHTTP400(err) {
-		_, err = b.post(ctx, "editMessageText", map[string]any{
-			"chat_id":    chatID,
-			"message_id": messageID,
-			"text":       text,
-		})
+	if err != nil {
+		var ae *apiError
+		if errors.As(err, &ae) {
+			if strings.Contains(strings.ToLower(ae.description), "message is not modified") {
+				return nil
+			}
+			if ae.status == http.StatusBadRequest {
+				_, err = b.post(ctx, "editMessageText", map[string]any{
+					"chat_id":    chatID,
+					"message_id": messageID,
+					"text":       text,
+				})
+				if err != nil && errors.As(err, &ae) && strings.Contains(strings.ToLower(ae.description), "message is not modified") {
+					return nil
+				}
+			}
+		}
 	}
 	return err
 }
@@ -720,9 +747,16 @@ func (b *Bot) SendFile(ctx context.Context, chatID int64, path, caption, kind st
 func (b *Bot) SendDocument(ctx context.Context, chatID int64, filePath, caption string) error {
 	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
 	if strings.TrimSpace(caption) != "" {
-		fields["caption"] = caption
+		trimmed := truncate(caption, 1024)
+		fields["caption"] = markdownToHTML(trimmed)
+		fields["parse_mode"] = "HTML"
 	}
 	_, err := b.postMultipart(ctx, "sendDocument", fields, "document", filePath)
+	if isHTTP400(err) && fields["parse_mode"] != "" {
+		fields["caption"] = truncate(caption, 1024)
+		delete(fields, "parse_mode")
+		_, err = b.postMultipart(ctx, "sendDocument", fields, "document", filePath)
+	}
 	return err
 }
 
@@ -730,9 +764,16 @@ func (b *Bot) SendDocument(ctx context.Context, chatID int64, filePath, caption 
 func (b *Bot) SendPhoto(ctx context.Context, chatID int64, filePath, caption string) error {
 	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
 	if strings.TrimSpace(caption) != "" {
-		fields["caption"] = caption
+		trimmed := truncate(caption, 1024)
+		fields["caption"] = markdownToHTML(trimmed)
+		fields["parse_mode"] = "HTML"
 	}
 	_, err := b.postMultipart(ctx, "sendPhoto", fields, "photo", filePath)
+	if isHTTP400(err) && fields["parse_mode"] != "" {
+		fields["caption"] = truncate(caption, 1024)
+		delete(fields, "parse_mode")
+		_, err = b.postMultipart(ctx, "sendPhoto", fields, "photo", filePath)
+	}
 	return err
 }
 
@@ -996,8 +1037,13 @@ type chat struct {
 
 type callbackQuery struct {
 	ID      string   `json:"id"`
+	From    tgUser   `json:"from"`
 	Data    string   `json:"data"`
 	Message *message `json:"message"`
+}
+
+type tgUser struct {
+	ID int64 `json:"id"`
 }
 
 // StreamWriter streams incremental LLM deltas and tool execution status to

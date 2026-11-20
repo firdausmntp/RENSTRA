@@ -151,3 +151,58 @@ func TestCancelSavesPartialAssistantText(t *testing.T) {
 		t.Fatalf("got %+v", last)
 	}
 }
+
+func TestTurnStatsFilled(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{ToolCalls: []provider.ToolCall{{ID: "c1", Name: "terminal", Arguments: `{"cmd":"echo halo"}`}}, Usage: &provider.Usage{InputTokens: 100, OutputTokens: 20}}},
+		{{Text: "selesai", Usage: &provider.Usage{InputTokens: 200, OutputTokens: 50}, Done: true}},
+	}}
+	r := &agent.Runner{
+		Provider: fp, Tools: tool.NewRegistry(tool.NewTerminal(t.TempDir(), 5*time.Second)), Store: s,
+		Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard,
+		ContextWindow: 16000, PriceIn: 3.0, PriceOut: 6.0,
+		Approve: func(context.Context, string, json.RawMessage) (bool, error) { return true, nil },
+	}
+	var stats agent.TurnStats
+	ctx := agent.WithTurnStats(context.Background(), &stats)
+	if _, err := r.Run(ctx, 1, "jalankan echo"); err != nil {
+		t.Fatal(err)
+	}
+	if stats.TokensIn != 300 || stats.TokensOut != 70 {
+		t.Fatalf("tokens = %d/%d, want 300/70", stats.TokensIn, stats.TokensOut)
+	}
+	if stats.ToolCalls != 1 || stats.Iterations != 2 {
+		t.Fatalf("tools/iters = %d/%d, want 1/2", stats.ToolCalls, stats.Iterations)
+	}
+	if stats.ContextUsed != 200 || stats.ContextWindow != 16000 {
+		t.Fatalf("context = %d/%d, want 200/16000 (usage provider menang)", stats.ContextUsed, stats.ContextWindow)
+	}
+	wantCost := (300.0/1e6)*3.0 + (70.0/1e6)*6.0
+	if stats.CostUSD < wantCost*0.99 || stats.CostUSD > wantCost*1.01 {
+		t.Fatalf("cost = %f, want ~%f", stats.CostUSD, wantCost)
+	}
+	if stats.Elapsed <= 0 {
+		t.Fatal("elapsed harus terisi")
+	}
+}
+
+func TestTurnStatsFallbackEstimateWithoutUsage(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{{{Text: "tanpa usage", Done: true}}}}
+	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
+	var stats agent.TurnStats
+	ctx := agent.WithTurnStats(context.Background(), &stats)
+	if _, err := r.Run(ctx, 1, "halo dunia"); err != nil {
+		t.Fatal(err)
+	}
+	if stats.TokensIn != 0 || stats.TokensOut != 0 {
+		t.Fatalf("tanpa usage provider tokens harus 0, got %d/%d", stats.TokensIn, stats.TokensOut)
+	}
+	if stats.ContextUsed <= 0 {
+		t.Fatal("estimasi context harus terisi walau tanpa usage provider")
+	}
+	if stats.ContextWindow != 32000 {
+		t.Fatalf("window default = %d, want 32000", stats.ContextWindow)
+	}
+}

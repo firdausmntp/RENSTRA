@@ -8,6 +8,7 @@ import (
 
 var (
 	mdCodeBlockRE  = regexp.MustCompile("(?s)```([a-zA-Z0-9_-]*)\\n?(.*?)```")
+	mdBlockquoteRE = regexp.MustCompile(`(?m)^(?:>[ \t]?.*(?:\r?\n|$))+`)
 	mdInlineCodeRE = regexp.MustCompile("`([^`\n]+)`")
 	mdLinkRE       = regexp.MustCompile(`\[([^\]\n]+)\]\((https?://[^\s)]+)\)`)
 	mdBoldRE       = regexp.MustCompile(`\*\*([^\n*]+?)\*\*`)
@@ -36,26 +37,45 @@ func markdownToHTML(s string) string {
 		return stash("<pre>" + code + "</pre>")
 	})
 
-	// 2. Stash inline code.
+	// 2. Stash blockquotes.
+	out = mdBlockquoteRE.ReplaceAllStringFunc(out, func(m string) string {
+		lines := strings.Split(m, "\n")
+		var clean []string
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			line = strings.TrimPrefix(line, ">")
+			line = strings.TrimPrefix(line, " ")
+			clean = append(clean, html.EscapeString(line))
+		}
+		if len(clean) == 0 {
+			return ""
+		}
+		return stash("<blockquote>" + strings.Join(clean, "\n") + "</blockquote>\n")
+	})
+
+	// 3. Stash inline code.
 	out = mdInlineCodeRE.ReplaceAllStringFunc(out, func(m string) string {
 		sub := mdInlineCodeRE.FindStringSubmatch(m)
 		return stash("<code>" + html.EscapeString(sub[1]) + "</code>")
 	})
 
-	// 3. Stash links.
+	// 4. Stash links.
 	out = mdLinkRE.ReplaceAllStringFunc(out, func(m string) string {
 		sub := mdLinkRE.FindStringSubmatch(m)
 		return stash("<a href=\"" + html.EscapeString(sub[2]) + "\">" + html.EscapeString(sub[1]) + "</a>")
 	})
 
-	// 4. Escape remaining plain text HTML entities.
+	// 5. Escape remaining plain text HTML entities.
 	out = html.EscapeString(out)
 
-	// 5. Bold & italic on escaped text.
+	// 6. Bold & italic on escaped text.
 	out = mdBoldRE.ReplaceAllString(out, "<b>$1</b>")
 	out = mdItalicRE.ReplaceAllString(out, "<i>$1</i>")
 
-	// 6. Restore stashed HTML blocks.
+	// 7. Restore stashed HTML blocks.
 	for i, val := range slots {
 		key := "\x00SLOT" + string(rune('A'+i/26)) + string(rune('A'+i%26)) + "\x00"
 		out = strings.ReplaceAll(out, key, val)

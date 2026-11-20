@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +43,7 @@ import (
 	"renstra/internal/store"
 	"renstra/internal/telegram"
 	"renstra/internal/tool"
+	"renstra/internal/update"
 )
 
 func migrateCmd(args []string) error {
@@ -509,6 +511,12 @@ func serveCmd() error {
 		logger.Warn("telegram_set_my_commands_failed", "error", err.Error())
 	}
 
+	go func() {
+		if rel, isNewer := update.CheckCachedUpdate(home, version, 12*time.Hour); isNewer && rel != nil {
+			logger.Info("renstra_update_available", "current", version, "latest", rel.TagName, "url", rel.HTMLURL)
+		}
+	}()
+
 	// Cron runner in background with panic recovery and isolated Runner clone.
 	cronRunner := runner.Clone()
 	go func() {
@@ -612,12 +620,12 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 	}
 
 	switch cmd {
-	case "/new", "/reset":
+	case "/new", "/reset", "/restart":
 		if err := h.store.SessionBreak(ctx, chatID); err != nil {
 			return "", fmt.Errorf("gagal reset sesi: %w", err)
 		}
 		h.invalidateAllPrompts()
-		return "Sesi baru dimulai. Catatan memori di-freeze ulang dan riwayat diputus.", nil
+		return "Sesi baru dimulai (restart). Catatan memori di-freeze ulang dan riwayat diputus.", nil
 
 	case "/usage":
 		today := time.Now().Format("2006-01-02")
@@ -666,6 +674,9 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		summary, err := h.runner.ForceCompact(ctx, chatID)
 		if err != nil {
 			return "", fmt.Errorf("gagal kompaksi: %w", err)
+		}
+		if summary == "pesan belum cukup banyak untuk dikompaksi" {
+			return "Pesan belum cukup banyak untuk dikompaksi (minimal riwayat melebihi 6 pesan).", nil
 		}
 		return fmt.Sprintf("Kompaksi selesai.\nRingkasan konteks:\n%s", summary), nil
 
@@ -739,6 +750,19 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		if strings.EqualFold(arg, "reload") {
 			h.invalidateAllPrompts()
 			reloaded = true
+		} else if arg != "" {
+			sk, ok := h.runner.Skills.Get(arg)
+			if !ok {
+				return fmt.Sprintf("Skill %q tidak ditemukan; ketik /skills untuk daftar", arg), nil
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "🛠 **Skill: %s**\n", sk.Name)
+			if sk.Description != "" {
+				fmt.Fprintf(&b, "*%s*\n", sk.Description)
+			}
+			fmt.Fprintf(&b, "Path: `%s`\n\n", sk.Path)
+			b.WriteString(strings.TrimSpace(sk.Body))
+			return b.String(), nil
 		}
 		idx := strings.TrimSpace(h.runner.Skills.Index())
 		var b strings.Builder
@@ -750,6 +774,7 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		} else {
 			b.WriteString("Skills terdaftar:\n")
 			b.WriteString(idx)
+			b.WriteString("\n\n💡 Lihat detail skill: `/skills <nama>` • Muat ulang: `/skills reload`")
 		}
 		if conflicts := h.runner.Skills.Conflicts(); len(conflicts) > 0 {
 			b.WriteString("\n\nKonflik nama (lapis atas menang):\n")
@@ -758,6 +783,32 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			}
 		}
 		return strings.TrimRight(b.String(), "\n"), nil
+
+	case "/status":
+		cr := h.runnerForChat(ctx, chatID)
+		win := cr.ContextWindow
+		if win <= 0 {
+			win = 32000
+		}
+		msgs, _ := h.store.Messages(ctx, chatID)
+		used := agent.EstimateTokens(msgs)
+		if cr.Tools != nil {
+			used += agent.EstimateRequestTokens("", cr.Tools.Defs(), nil)
+		}
+		pct := float64(used) / float64(win) * 100
+		today := time.Now().Format("2006-01-02")
+		u, _ := h.store.UsageForDay(ctx, today)
+		skillsCount := 0
+		if cr.Skills != nil {
+			if idx := strings.TrimSpace(cr.Skills.Index()); idx != "" {
+				skillsCount = len(strings.Split(idx, "\n"))
+			}
+		}
+		return fmt.Sprintf("📊 **Status Sesi**\n• **Model:** `%s`\n• **Konteks:** %d / %d tok (%.0f%%)\n• **Riwayat:** %d pesan aktif\n• **Skills:** %d terdaftar\n• **Biaya Hari Ini:** $%.4f USD",
+			cr.GetModel(), used, win, pct, len(msgs), skillsCount, u.CostUSD), nil
+
+	case "/version":
+		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version), nil
 
 	case "/memory":
 		if h.runner.Memory == nil {
@@ -779,6 +830,11 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 
 	case "/cron":
 		return h.handleCronCmd(ctx, chatID, arg)
+
+	default:
+		if cmd != "" {
+			return fmt.Sprintf("Perintah %q tidak dikenal. Ketik /help untuk melihat panduan semua perintah.", cmd), nil
+		}
 	}
 
 	cr := h.runnerForChat(ctx, chatID)
@@ -902,9 +958,11 @@ func (h *telegramHandler) Approve(ctx context.Context, chatID int64, toolName, a
 }
 
 func buildProvider(pcfg config.ProviderConfig) (provider.Provider, error) {
-	apiKey := ""
+	apiKey := pcfg.APIKey
 	if pcfg.APIKeyEnv != "" {
-		apiKey = os.Getenv(pcfg.APIKeyEnv)
+		if envVal := os.Getenv(pcfg.APIKeyEnv); envVal != "" {
+			apiKey = envVal
+		}
 	}
 	switch pcfg.Kind {
 	case "", "openai", "custom":
@@ -999,9 +1057,11 @@ func buildTranscriber(cfg *config.Config) func(context.Context, string) (string,
 		if kind != "openai" && kind != "groq" && kind != "" {
 			continue
 		}
-		key := ""
+		key := p.APIKey
 		if p.APIKeyEnv != "" {
-			key = os.Getenv(p.APIKeyEnv)
+			if envVal := os.Getenv(p.APIKeyEnv); envVal != "" {
+				key = envVal
+			}
 		}
 		if key == "" && kind == "openai" {
 			key = os.Getenv("OPENAI_API_KEY")
@@ -1183,4 +1243,50 @@ func copySkillTree(srcDir, dstDir string) error {
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
+}
+
+func updateCmd(args []string) error {
+	checkOnly := len(args) > 0 && (args[0] == "check" || args[0] == "--check")
+
+	fmt.Printf("Memeriksa rilis terbaru dari %s (versi kamu: %s)...\n", update.DefaultRepo, version)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	rel, err := update.FetchLatestRelease(ctx, update.DefaultRepo, version)
+	if err != nil {
+		return fmt.Errorf("gagal memeriksa pembaruan: %w", err)
+	}
+
+	if !update.IsNewer(rel.TagName, version) {
+		fmt.Printf("✅ RENSTRA sudah versi terbaru (%s).\n", version)
+		return nil
+	}
+
+	fmt.Printf("🚀 Ditemukan versi baru: %s (rilis pada %s)\n", rel.TagName, rel.PublishedAt.Local().Format("02 Jan 2006"))
+	if rel.HTMLURL != "" {
+		fmt.Printf("Catatan rilis: %s\n\n", rel.HTMLURL)
+	}
+	if checkOnly {
+		fmt.Println("Jalankan `renstra update` untuk mengunduh dan memasang versi ini secara otomatis.")
+		return nil
+	}
+
+	targetAsset := update.TargetAssetName(runtime.GOOS, runtime.GOARCH)
+	fmt.Printf("Mengunduh asset: %s...\n", targetAsset)
+	err = update.DownloadAsset(ctx, rel, func(downloaded, total int64) {
+		if total > 0 {
+			pct := float64(downloaded) / float64(total) * 100
+			fmt.Printf("\rMengunduh... %.1f%% (%d / %d byte)", pct, downloaded, total)
+		} else {
+			fmt.Printf("\rMengunduh... %d byte", downloaded)
+		}
+	})
+	fmt.Println()
+	if err != nil {
+		return fmt.Errorf("gagal memperbarui: %w", err)
+	}
+
+	fmt.Printf("✨ Sukses! RENSTRA berhasil diperbarui ke %s.\n", rel.TagName)
+	fmt.Println("Jalankan `renstra version` untuk memverifikasi.")
+	return nil
 }

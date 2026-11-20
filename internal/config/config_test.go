@@ -66,3 +66,31 @@ providers:
 		t.Fatalf("anthropic path = %q, want empty so adapter defaults to /v1/messages", p.Path)
 	}
 }
+
+func TestLoadDotEnv(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, ".env")
+	envContent := `
+# test comment
+TEST_RENSTRA_KEY_A=secret123
+export TEST_RENSTRA_KEY_B="secret456"
+TEST_RENSTRA_KEY_C='secret789'
+`
+	if err := os.WriteFile(envPath, []byte(envContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := config.LoadDotEnv(envPath); err != nil {
+		t.Fatalf("LoadDotEnv failed: %v", err)
+	}
+
+	if got := os.Getenv("TEST_RENSTRA_KEY_A"); got != "secret123" {
+		t.Errorf("KEY_A = %q, want secret123", got)
+	}
+	if got := os.Getenv("TEST_RENSTRA_KEY_B"); got != "secret456" {
+		t.Errorf("KEY_B = %q, want secret456", got)
+	}
+	if got := os.Getenv("TEST_RENSTRA_KEY_C"); got != "secret789" {
+		t.Errorf("KEY_C = %q, want secret789", got)
+	}
+}

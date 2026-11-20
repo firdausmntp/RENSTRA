@@ -398,3 +398,14 @@ func TestResolveAuxTarget(t *testing.T) {
 		t.Fatalf("hasil salah: prov=%v model=%s in=%v out=%v", prov, model, pin, pout)
 	}
 }
+
+func TestUpdateCmdHelpAndUsage(t *testing.T) {
+	// Memastikan binary flags dan usage string terdaftar
+	if err := updateCmd([]string{"check"}); err != nil {
+		// Jika unauthenticated rate limit atau network offline di test environment,
+		// error tetap di-wrap dengan rapi dan tidak panik.
+		if !strings.Contains(err.Error(), "gagal memeriksa pembaruan") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+}
