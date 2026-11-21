@@ -31,19 +31,31 @@ type streamResult struct {
 	priceOut  float64
 }
 
-// streamWithFallback tries the primary provider, and on immediate error or
-// zero-output failure, tries each fallback target in sequence.
+// streamWithFallback uses smart capability + circuit-breaker routing across
+// primary and fallback targets, retrying on error or empty response.
 func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, history []provider.Message) (streamResult, error) {
 	primary := r.primaryTarget()
-	candidates := make([]FallbackTarget, 0, 1+len(r.Fallbacks))
-	candidates = append(candidates, primary)
-	candidates = append(candidates, r.Fallbacks...)
+	health := r.healthRegistry()
+	var allDefs []provider.ToolDef
+	if r.Tools != nil {
+		allDefs = r.Tools.Defs()
+	}
+	estTokens := EstimateRequestTokens(sysPrompt, allDefs, history)
+	needVision := hasImageAttachments(history)
+	candidates := rankSmartCandidates(primary, r.Fallbacks, health, needVision, estTokens)
+	if len(candidates) == 0 {
+		candidates = []FallbackTarget{primary}
+	}
 
 	sw := streamWriterFrom(ctx)
 	var lastErr error
+	minCtxWin := 0
 	for i, target := range candidates {
 		if ctx.Err() != nil {
 			return streamResult{streamErr: ctx.Err()}, nil
+		}
+		if minCtxWin > 0 && target.ContextWindow > 0 && target.ContextWindow <= minCtxWin {
+			continue
 		}
 
 		maxTok := target.MaxTokens
@@ -53,8 +65,8 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 
 		var toolDefs []provider.ToolDef
 		effectivePrompt := sysPrompt
-		if r.Tools != nil {
-			toolDefs = r.Tools.Defs()
+		if len(allDefs) > 0 {
+			toolDefs = allDefs
 		}
 		promptedMode := target.ToolsDisabled && len(toolDefs) > 0
 		if promptedMode {
@@ -70,7 +82,7 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 		}
 
 		if i > 0 && r.Logger != nil {
-			r.Logger.Warn("provider_fallback",
+			r.Logger.Warn("smart_fallback",
 				"provider", target.Provider.Name(),
 				"model", target.Model,
 				"attempt", i+1,
@@ -80,6 +92,10 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 
 		ch, err := target.Provider.Stream(ctx, req)
 		if err != nil {
+			kind := health.recordFailure(target, err)
+			if kind == errKindContext && target.ContextWindow > minCtxWin {
+				minCtxWin = target.ContextWindow
+			}
 			lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, err)
 			continue
 		}
@@ -119,14 +135,25 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
 		}
 
-		// If the stream failed completely without emitting any output and we have
-		// another fallback to try, proceed to the next fallback.
+		// Retry next fallback if stream failed without emitting output, OR if
+		// stream ended cleanly with completely empty output and backups exist.
 		if streamErr != nil && !hasAnyOutput && i < len(candidates)-1 {
+			kind := health.recordFailure(target, streamErr)
+			if kind == errKindContext && target.ContextWindow > minCtxWin {
+				minCtxWin = target.ContextWindow
+			}
 			lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, streamErr)
 			continue
 		}
 
 		finalText := text.String()
+		if streamErr == nil && len(calls) == 0 && strings.TrimSpace(finalText) == "" && i < len(candidates)-1 {
+			emptyErr := fmt.Errorf("model %s mengembalikan respons kosong", target.Model)
+			health.recordFailure(target, emptyErr)
+			lastErr = emptyErr
+			continue
+		}
+
 		if promptedMode && len(calls) == 0 && streamErr == nil {
 			if parsed, ok := parsePromptedToolCall(finalText); ok {
 				calls = []provider.ToolCall{parsed}
@@ -139,6 +166,10 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 					io.WriteString(sw, finalText)
 				}
 			}
+		}
+
+		if streamErr == nil && (len(calls) > 0 || strings.TrimSpace(finalText) != "") {
+			health.recordSuccess(target)
 		}
 
 		return streamResult{

@@ -23,6 +23,10 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 		var text string
 		var rows [][]telegram.InlineButton
 		switch parts[1] {
+		case "menu", "start":
+			text, rows = telegram.StartText, telegram.DefaultQuickMenu()
+		case "help":
+			text, rows = telegram.HelpText, telegram.HelpQuickMenu()
 		case "model":
 			text, rows = h.buildModelMenu(ctx, chatID, 0)
 		case "approval":
@@ -33,6 +37,10 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 			text, rows = h.buildCronMenu(ctx, chatID, 0)
 		case "config":
 			text, rows = h.buildConfigMenu(ctx, chatID, 0)
+		case "memory":
+			text, rows = h.buildMemoryMenu()
+		case "fallback":
+			text, rows = h.buildFallbackMenu(ctx, chatID)
 		case "status":
 			text, rows = h.buildStatusMenu(ctx, chatID)
 		default:
@@ -42,6 +50,12 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 
 	case "cfg":
 		h.handleConfigCallback(ctx, chatID, msgID, parts)
+
+	case "mem":
+		h.handleMemoryCallback(ctx, chatID, msgID, parts)
+
+	case "fb":
+		h.handleFallbackCallback(ctx, chatID, msgID, parts)
 
 	case "mdl":
 		if len(parts) < 3 {
@@ -118,7 +132,10 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 			}
 			fmt.Fprintf(&b, "Path: `%s`\n\n%s", sk.Path, strings.TrimSpace(sk.Body))
 			rows := [][]telegram.InlineButton{
-				{{Text: "⬅️ Kembali ke Daftar", CallbackData: fmt.Sprintf("skl:p:%d", page), Style: "primary"}},
+				{
+					{Text: "⬅️ Kembali ke Daftar", CallbackData: fmt.Sprintf("skl:p:%d", page), Style: "primary"},
+					{Text: "🏠 Menu", CallbackData: "cmd:menu", Style: "primary"},
+				},
 			}
 			_ = h.bot.EditMessageWithKeyboard(ctx, chatID, msgID, b.String(), rows)
 		}

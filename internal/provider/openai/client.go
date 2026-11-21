@@ -1,18 +1,15 @@
 package openai
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -94,6 +91,10 @@ type streamChunk struct {
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"delta"`
+		Message *struct {
+			Content   string         `json:"content"`
+			ToolCalls []wireToolCall `json:"tool_calls"`
+		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *struct {
@@ -245,91 +246,4 @@ func (c *Client) buildRequest(req provider.Request) wireRequest {
 		out.Tools = append(out.Tools, w)
 	}
 	return out
-}
-
-// consume reads the SSE stream. Partial tool-call arguments are accumulated
-// until the stream ends. A stream that stops without [DONE] (or a
-// finish_reason) is reported as an error: half a tool call must never run.
-func (c *Client) consume(ctx context.Context, r io.Reader, ch chan<- provider.Event) {
-	scanner := newSSEScanner(r)
-	partial := map[int]*provider.ToolCall{}
-	var usage *provider.Usage
-	sawDone := false
-	finished := false
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "[DONE]" {
-			sawDone = true
-			break
-		}
-		var chunk streamChunk
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("chunk tidak valid: %w", err)})
-			return
-		}
-		if chunk.Error != nil {
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("provider error: %s", chunk.Error.Message)})
-			return
-		}
-		if chunk.Usage != nil {
-			usage = &provider.Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}
-		}
-		for _, choice := range chunk.Choices {
-			if choice.FinishReason != "" {
-				finished = true
-			}
-			if choice.Delta.Content != "" {
-				if !send(ctx, ch, provider.Event{Text: choice.Delta.Content}) {
-					return
-				}
-			}
-			for _, tc := range choice.Delta.ToolCalls {
-				p, ok := partial[tc.Index]
-				if !ok {
-					p = &provider.ToolCall{}
-					partial[tc.Index] = p
-				}
-				if tc.ID != "" {
-					p.ID = tc.ID
-				}
-				if tc.Function.Name != "" {
-					p.Name = tc.Function.Name
-				}
-				p.Arguments += tc.Function.Arguments
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		send(ctx, ch, provider.Event{Err: err})
-		return
-	}
-	if !sawDone && !finished {
-		send(ctx, ch, provider.Event{Err: errors.New("stream terputus tanpa [DONE]")})
-		return
-	}
-
-	calls := make([]provider.ToolCall, 0, len(partial))
-	indexes := make([]int, 0, len(partial))
-	for i := range partial {
-		indexes = append(indexes, i)
-	}
-	sort.Ints(indexes)
-	for _, i := range indexes {
-		calls = append(calls, *partial[i])
-	}
-	send(ctx, ch, provider.Event{ToolCalls: calls, Usage: usage, Done: true})
-}
-
-func newSSEScanner(r io.Reader) *bufio.Scanner {
-	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	return s
 }

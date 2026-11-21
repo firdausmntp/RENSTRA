@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -97,9 +96,10 @@ type ProviderConfig struct {
 }
 
 type Config struct {
-	DefaultModel string                    `yaml:"default_model"`
-	Fallbacks    []string                  `yaml:"fallbacks"`
-	Providers    map[string]ProviderConfig `yaml:"providers"`
+	DefaultModel  string                    `yaml:"default_model"`
+	Fallbacks     []string                  `yaml:"fallbacks"`
+	SmartFallback *bool                     `yaml:"smart_fallback"`
+	Providers     map[string]ProviderConfig `yaml:"providers"`
 	Aliases      map[string]string         `yaml:"aliases"`
 	Limits       Limits                    `yaml:"limits"`
 	Agent        Agent                     `yaml:"agent"`
@@ -183,6 +183,23 @@ func (a Agent) AutoCompaction() bool {
 	return *a.AutoCompact
 }
 
+// SmartFallbackEnabled reports whether automatic multi-provider discovery is
+// active (when smart_fallback is true or fallbacks contains "auto").
+func (c *Config) SmartFallbackEnabled() bool {
+	if c == nil {
+		return false
+	}
+	if c.SmartFallback != nil {
+		return *c.SmartFallback
+	}
+	for _, f := range c.Fallbacks {
+		if strings.EqualFold(strings.TrimSpace(f), "auto") {
+			return true
+		}
+	}
+	return false
+}
+
 // Threshold returns the compaction trigger ratio, clamped to a sane range.
 func (a Agent) Threshold() float64 {
 	t := a.CompactThreshold
@@ -264,45 +281,6 @@ func Load() (*Config, error) {
 		cfg.Providers[name] = p
 	}
 	return cfg, nil
-}
-
-// Resolve turns "alias", "provider" or "provider:model" into a provider entry and model name.
-func Resolve(ref string, cfg *Config) (ProviderConfig, string, error) {
-	for i := 0; i < 5; i++ {
-		target, ok := cfg.Aliases[ref]
-		if !ok {
-			break
-		}
-		ref = target
-	}
-	if ref == "" {
-		return ProviderConfig{}, "", errors.New("model belum diset; jalankan `renstra setup` atau pilih model dengan `renstra chat <provider>:<model>`")
-	}
-
-	providerName, model := ref, ""
-	if idx := strings.Index(ref, ":"); idx >= 0 {
-		providerName, model = ref[:idx], ref[idx+1:]
-	}
-
-	p, ok := cfg.Providers[providerName]
-	if !ok {
-		if len(cfg.Providers) == 0 {
-			return ProviderConfig{}, "", fmt.Errorf("provider %q tidak ditemukan dan belum ada provider terkonfigurasi; jalankan `renstra setup`", providerName)
-		}
-		names := make([]string, 0, len(cfg.Providers))
-		for n := range cfg.Providers {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		return ProviderConfig{}, "", fmt.Errorf("provider %q tidak dikenal (tersedia: %s)", providerName, strings.Join(names, ", "))
-	}
-	if model == "" {
-		model = p.DefaultModel
-	}
-	if model == "" {
-		return ProviderConfig{}, "", fmt.Errorf("provider %q tidak punya model default", providerName)
-	}
-	return p, model, nil
 }
 
 // ModelConfig returns the capability table entry, with safe defaults filled in.

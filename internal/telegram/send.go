@@ -17,6 +17,14 @@ import (
 
 func (b *Bot) reply(ctx context.Context, chatID int64, text string) {
 	for _, chunk := range SplitMessage(text, MaxMessageLength) {
+		if len([]rune(markdownToHTML(chunk))) > MaxMessageLength {
+			for _, sub := range SplitMessage(chunk, 2400) {
+				if err := b.SendMessage(ctx, chatID, sub); err != nil {
+					return
+				}
+			}
+			continue
+		}
 		if err := b.SendMessage(ctx, chatID, chunk); err != nil {
 			return
 		}
@@ -37,12 +45,14 @@ func (b *Bot) SendRichMessage(ctx context.Context, chatID int64, markdown string
 		return errors.New("telegram: teks kosong")
 	}
 	for _, chunk := range SplitMessage(markdown, MaxRichMessageLength) {
-		_, err := b.post(ctx, "sendRichMessage", map[string]any{
+		payload := map[string]any{
 			"chat_id": chatID,
 			"rich_message": map[string]any{
 				"markdown": chunk,
 			},
-		})
+		}
+		applyReplyTarget(ctx, payload)
+		_, err := b.post(ctx, "sendRichMessage", payload)
 		if err != nil {
 			b.reply(ctx, chatID, chunk)
 		}
@@ -55,7 +65,7 @@ func (b *Bot) SendRichMessageDraft(ctx context.Context, chatID, draftID int64, m
 	if strings.TrimSpace(markdown) == "" {
 		return errors.New("telegram: teks kosong")
 	}
-	_, err := b.post(ctx, "sendRichMessageDraft", map[string]any{
+	payload := map[string]any{
 		"chat_id":  chatID,
 		"draft_id": draftID,
 		"rich_message": map[string]any{
@@ -63,7 +73,9 @@ func (b *Bot) SendRichMessageDraft(ctx context.Context, chatID, draftID int64, m
 		},
 		"can_stop":     canStop,
 		"keep_on_stop": keepOnStop,
-	})
+	}
+	applyThreadOnly(ctx, payload)
+	_, err := b.post(ctx, "sendRichMessageDraft", payload)
 	return err
 }
 
@@ -72,14 +84,16 @@ func (b *Bot) SendMessageDraft(ctx context.Context, chatID, draftID int64, text 
 	if strings.TrimSpace(text) == "" {
 		return errors.New("telegram: teks kosong")
 	}
-	_, err := b.post(ctx, "sendMessageDraft", map[string]any{
+	payload := map[string]any{
 		"chat_id":      chatID,
 		"draft_id":     draftID,
 		"text":         markdownToHTML(text),
 		"parse_mode":   "HTML",
 		"can_stop":     canStop,
 		"keep_on_stop": keepOnStop,
-	})
+	}
+	applyThreadOnly(ctx, payload)
+	_, err := b.post(ctx, "sendMessageDraft", payload)
 	return err
 }
 
@@ -88,13 +102,17 @@ func (b *Bot) SendMessageReturningID(ctx context.Context, chatID int64, text str
 	if strings.TrimSpace(text) == "" {
 		return 0, errors.New("telegram: teks kosong")
 	}
-	raw, err := b.post(ctx, "sendMessage", map[string]any{
+	payload := map[string]any{
 		"chat_id":    chatID,
 		"text":       markdownToHTML(text),
 		"parse_mode": "HTML",
-	})
+	}
+	applyReplyTarget(ctx, payload)
+	raw, err := b.post(ctx, "sendMessage", payload)
 	if isHTTP400(err) {
-		raw, err = b.post(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text})
+		plain := map[string]any{"chat_id": chatID, "text": text}
+		applyReplyTarget(ctx, plain)
+		raw, err = b.post(ctx, "sendMessage", plain)
 	}
 	if err != nil {
 		return 0, err
@@ -113,35 +131,9 @@ func (b *Bot) SendChatAction(ctx context.Context, chatID int64, action string) e
 	if action == "" {
 		action = "typing"
 	}
-	_, err := b.post(ctx, "sendChatAction", map[string]any{"chat_id": chatID, "action": action})
-	return err
-}
-
-// DefaultCommands returns the slash command menu registered by renstra serve.
-func DefaultCommands() []BotCommand {
-	return []BotCommand{
-		{Command: "start", Description: "Mulai & tampilkan sambutan"},
-		{Command: "help", Description: "Panduan lengkap semua perintah"},
-		{Command: "new", Description: "Mulai sesi baru (potong riwayat lama)"},
-		{Command: "restart", Description: "Restart sesi & potong riwayat lama"},
-		{Command: "stop", Description: "Hentikan tugas yang sedang berjalan"},
-		{Command: "approval", Description: "Atur mode persetujuan (prompt/auto/deny)"},
-		{Command: "config", Description: "Ubah pengaturan default bot (compact/limit/dll)"},
-		{Command: "model", Description: "Cek atau ganti model aktif"},
-		{Command: "skills", Description: "Daftar skill aktif (/skills reload)"},
-		{Command: "memory", Description: "Lihat catatan memori & profil user"},
-		{Command: "cron", Description: "Kelola jadwal otomatis"},
-		{Command: "status", Description: "Info status sesi, model, konteks & biaya"},
-		{Command: "usage", Description: "Cek token & estimasi biaya hari ini"},
-		{Command: "insights", Description: "Ringkasan pemakaian harian, 7 & 30 hari"},
-		{Command: "compact", Description: "Kompaksi ringkasan riwayat sekarang"},
-		{Command: "version", Description: "Tampilkan versi binary RENSTRA"},
-	}
-}
-
-// SetMyCommands registers the bot's slash command menu via Telegram setMyCommands.
-func (b *Bot) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
-	_, err := b.post(ctx, "setMyCommands", map[string]any{"commands": cmds})
+	payload := map[string]any{"chat_id": chatID, "action": action}
+	applyThreadOnly(ctx, payload)
+	_, err := b.post(ctx, "sendChatAction", payload)
 	return err
 }
 
@@ -265,6 +257,7 @@ func (b *Bot) SendFile(ctx context.Context, chatID int64, path, caption, kind st
 // SendDocument uploads and sends a document file to a Telegram chat.
 func (b *Bot) SendDocument(ctx context.Context, chatID int64, filePath, caption string) error {
 	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
+	applyReplyFields(ctx, fields)
 	if strings.TrimSpace(caption) != "" {
 		trimmed := truncate(caption, 1024)
 		fields["caption"] = markdownToHTML(trimmed)
@@ -282,6 +275,7 @@ func (b *Bot) SendDocument(ctx context.Context, chatID int64, filePath, caption 
 // SendPhoto uploads and sends a photo file to a Telegram chat.
 func (b *Bot) SendPhoto(ctx context.Context, chatID int64, filePath, caption string) error {
 	fields := map[string]string{"chat_id": fmt.Sprintf("%d", chatID)}
+	applyReplyFields(ctx, fields)
 	if strings.TrimSpace(caption) != "" {
 		trimmed := truncate(caption, 1024)
 		fields["caption"] = markdownToHTML(trimmed)

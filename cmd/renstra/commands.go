@@ -12,27 +12,23 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"renstra/internal/cli"
 	"renstra/internal/config"
 	"renstra/internal/mcp"
-	"renstra/internal/provider/google"
-	"renstra/internal/provider/groq"
-	"renstra/internal/provider/mistral"
-	"renstra/internal/provider/ollama"
-	"renstra/internal/provider/openrouter"
-	"renstra/internal/provider/xai"
 	"renstra/internal/skill"
 	"renstra/internal/store"
 )
 
 func mcpCmd(args []string) error {
+	out := cli.Writer(os.Stdout)
 	cfgs := loadMCPConfigs()
 	if len(cfgs) == 0 {
-		fmt.Println("(belum ada server MCP terdaftar di mcp.yaml)")
+		fmt.Fprintf(out, "%s(belum ada server MCP terdaftar di mcp.yaml)%s\n", cli.ColorDim, cli.ColorReset)
 		return nil
 	}
-	fmt.Printf("Server MCP terkonfigurasi (%d):\n", len(cfgs))
+	fmt.Fprintf(out, "%s╭─ Server MCP terkonfigurasi (%d)%s\n", cli.ColorCyan, len(cfgs), cli.ColorReset)
 	for _, c := range cfgs {
-		fmt.Printf("  %-15s cmd=%s args=%v\n", c.Name, c.Command, c.Args)
+		fmt.Fprintf(out, "  %s%-15s%s cmd=%s%s%s args=%v\n", cli.ColorYellow, c.Name, cli.ColorReset, cli.ColorGreen, c.Command, cli.ColorReset, c.Args)
 	}
 	return nil
 }
@@ -80,36 +76,6 @@ func loadMCPConfigs() []mcp.ServerConfig {
 		}
 	}
 	return out
-}
-
-func modelListCmd() {
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "gagal memuat config: %v\n", err)
-	}
-
-	fmt.Println("Provider aktif:")
-	fmt.Println("  openai     (aktif) - endpoint OpenAI-compatible / custom")
-	fmt.Println("  anthropic  (aktif) - Claude Messages API")
-	for _, name := range []string{
-		openrouter.Name(), groq.Name(), google.Name(),
-		ollama.Name(), mistral.Name(), xai.Name(),
-	} {
-		fmt.Printf("  %-10s (aktif)\n", name)
-	}
-
-	if cfg != nil && len(cfg.Providers) > 0 {
-		fmt.Println("\nProvider terkonfigurasi di config.yaml:")
-		for name, p := range cfg.Providers {
-			fmt.Printf("  %-12s kind=%-10s base=%s default=%s\n", name, p.Kind, p.BaseURL, p.DefaultModel)
-		}
-	}
-	if cfg != nil && len(cfg.Aliases) > 0 {
-		fmt.Println("\nAlias model:")
-		for alias, target := range cfg.Aliases {
-			fmt.Printf("  %-12s -> %s\n", alias, target)
-		}
-	}
 }
 
 func skillCmd(args []string) error {
@@ -221,15 +187,16 @@ func usageCmd() error {
 		monthUsage = store.Usage{}
 	}
 
-	fmt.Printf("Pemakaian RENSTRA (%s):\n", home)
-	fmt.Printf("  Hari ini (%s):\n", today)
-	fmt.Printf("    Tokens in  : %d\n", dayUsage.TokensIn)
-	fmt.Printf("    Tokens out : %d\n", dayUsage.TokensOut)
-	fmt.Printf("    Biaya est  : $%.4f\n\n", dayUsage.CostUSD)
-	fmt.Println("  30 hari terakhir:")
-	fmt.Printf("    Tokens in  : %d\n", monthUsage.TokensIn)
-	fmt.Printf("    Tokens out : %d\n", monthUsage.TokensOut)
-	fmt.Printf("    Biaya est  : $%.4f\n", monthUsage.CostUSD)
+	fmt.Fprintf(cli.Writer(os.Stdout), "%s╭─ Pemakaian RENSTRA%s %s(%s)%s\n", cli.ColorCyan, cli.ColorReset, cli.ColorDim, home, cli.ColorReset)
+	out := cli.Writer(os.Stdout)
+	fmt.Fprintf(out, "  %sHari ini (%s):%s\n", cli.ColorYellow, today, cli.ColorReset)
+	fmt.Fprintf(out, "    Tokens in  : %s%d%s\n", cli.ColorWhite, dayUsage.TokensIn, cli.ColorReset)
+	fmt.Fprintf(out, "    Tokens out : %s%d%s\n", cli.ColorWhite, dayUsage.TokensOut, cli.ColorReset)
+	fmt.Fprintf(out, "    Biaya est  : %s$%.4f%s\n\n", cli.ColorGreen, dayUsage.CostUSD, cli.ColorReset)
+	fmt.Fprintf(out, "  %s30 hari terakhir:%s\n", cli.ColorYellow, cli.ColorReset)
+	fmt.Fprintf(out, "    Tokens in  : %s%d%s\n", cli.ColorWhite, monthUsage.TokensIn, cli.ColorReset)
+	fmt.Fprintf(out, "    Tokens out : %s%d%s\n", cli.ColorWhite, monthUsage.TokensOut, cli.ColorReset)
+	fmt.Fprintf(out, "    Biaya est  : %s$%.4f%s\n", cli.ColorGreen, monthUsage.CostUSD, cli.ColorReset)
 	return nil
 }
 

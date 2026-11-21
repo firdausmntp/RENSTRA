@@ -67,10 +67,10 @@ func findOpenCodeBlock(s string) (bool, string) {
 	return inBlock, blockLang
 }
 
-// startText is the /start welcome: identity, capabilities, quick start, and a
+// StartText is the /start welcome: identity, capabilities, quick start, and a
 // compact command menu. Only markdown supported by markdownToHTML is used
 // (bold, italic, inline code, fenced blocks, blockquotes, links).
-const startText = "⚡ **RENSTRA** • Autonomous AI Agent\n" +
+const StartText = "⚡ **RENSTRA** • Autonomous AI Agent\n" +
 	"*Self-hosted • Telegram-first • Single-binary Go*\n\n" +
 	"Halo! Saya **RENSTRA**, asisten AI mandiri yang hidup langsung di server kamu — bukan sekadar chatbot. Saya bekerja nyata: eksekusi terminal, edit kode, riset web, sampai tugas terjadwal.\n\n" +
 	"🛠 **Kapabilitas**\n" +
@@ -91,21 +91,25 @@ const startText = "⚡ **RENSTRA** • Autonomous AI Agent\n" +
 	"• `/cron` jadwal otomatis • `/usage` biaya hari ini\n\n" +
 	"💡 *Ketik /help untuk panduan lengkap. Selamat bekerja!*"
 
-// helpText is the /help full command reference, grouped by category.
-const helpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
+// HelpText is the /help full command reference, grouped by category.
+const HelpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
 	"💬 **Sesi & Kontrol**\n" +
 	"• `/new`, `/reset`, atau `/restart` — mulai sesi baru; riwayat diputus, memori di-freeze ulang\n" +
 	"• `/stop` — hentikan tugas yang sedang berjalan\n" +
 	"• `/approval [prompt|auto|deny]` — atur mode persetujuan eksekusi tool\n" +
 	"• `/config [key val]` — ubah pengaturan default (auto_compact, threshold, max_iters, timeout, limits, prompt)\n" +
 	"• `/status` — ringkasan status sesi, model, konteks & biaya\n" +
+	"• `/export` — export transkrip sesi aktif menjadi file `.md`\n" +
+	"• `/logs` — unduh file log error & diagnostik terbaru (`/logs clear` untuk hapus)\n" +
 	"• `/compact` — ringkas riwayat sekarang supaya konteks lega\n\n" +
 	"🧠 **Model & Kecerdasan**\n" +
 	"• `/model` — model aktif + daftar provider, model & alias\n" +
 	"• `/model <nama>` — ganti model (nama, alias, atau provider:model)\n" +
+	"• `/fallback` — status Smart Fallback, circuit breaker & auto-discovery\n" +
 	"• `/skills` — daftar skill terdaftar (/skills <nama> untuk isi lengkap)\n" +
 	"• `/skills reload` — scan ulang skill dari disk\n" +
-	"• `/memory` — lihat memori jangka panjang & profil user\n\n" +
+	"• `/memory` — lihat & kelola memori jangka panjang & profil user\n" +
+	"• `/remember <catatan>` — simpan catatan ke memori (atau reply pesan dgn `/remember`)\n\n" +
 	"⏰ **Otomasi (Cron)**\n" +
 	"• `/cron list` — lihat semua jadwal\n" +
 	"• `/cron add <schedule> | <prompt>` — tambah jadwal baru\n" +

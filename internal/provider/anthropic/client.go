@@ -1,18 +1,15 @@
 package anthropic
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
 
@@ -285,111 +282,4 @@ func rawObject(args string) json.RawMessage {
 		return json.RawMessage("{}")
 	}
 	return json.RawMessage(args)
-}
-
-// consume reads the SSE stream, assembling tool_use input from the
-// input_json_delta fragments. A stream that ends without message_stop is an
-// error: half a tool call must never run.
-func (c *Client) consume(ctx context.Context, r io.Reader, ch chan<- provider.Event) {
-	scanner := newSSEScanner(r)
-	partial := map[int]*provider.ToolCall{}
-	args := map[int]*strings.Builder{}
-	var usage *provider.Usage
-	sawStop := false
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" {
-			continue
-		}
-		var ev streamEvent
-		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("event tidak valid: %w", err)})
-			return
-		}
-
-		switch ev.Type {
-		case "message_start":
-			if ev.Message != nil && ev.Message.Usage != nil {
-				usage = &provider.Usage{InputTokens: ev.Message.Usage.InputTokens, OutputTokens: ev.Message.Usage.OutputTokens}
-			}
-		case "content_block_start":
-			if ev.ContentBlock != nil && ev.ContentBlock.Type == "tool_use" {
-				partial[ev.Index] = &provider.ToolCall{ID: ev.ContentBlock.ID, Name: ev.ContentBlock.Name}
-				args[ev.Index] = &strings.Builder{}
-			}
-		case "content_block_delta":
-			if ev.Delta == nil {
-				continue
-			}
-			switch ev.Delta.Type {
-			case "text_delta":
-				if ev.Delta.Text != "" {
-					if !send(ctx, ch, provider.Event{Text: ev.Delta.Text}) {
-						return
-					}
-				}
-			case "input_json_delta":
-				if b, ok := args[ev.Index]; ok {
-					b.WriteString(ev.Delta.PartialJSON)
-				}
-			}
-		case "message_delta":
-			if ev.Usage != nil {
-				if usage == nil {
-					usage = &provider.Usage{}
-				}
-				if ev.Usage.InputTokens != 0 {
-					usage.InputTokens = ev.Usage.InputTokens
-				}
-				usage.OutputTokens = ev.Usage.OutputTokens
-			}
-		case "message_stop":
-			sawStop = true
-		case "error":
-			msg := "provider error"
-			if ev.Error != nil && ev.Error.Message != "" {
-				msg = ev.Error.Message
-			}
-			send(ctx, ch, provider.Event{Err: errors.New(msg)})
-			return
-		}
-		if sawStop {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		send(ctx, ch, provider.Event{Err: err})
-		return
-	}
-	if !sawStop {
-		send(ctx, ch, provider.Event{Err: errors.New("stream terputus tanpa message_stop")})
-		return
-	}
-
-	indexes := make([]int, 0, len(partial))
-	for i := range partial {
-		indexes = append(indexes, i)
-	}
-	sort.Ints(indexes)
-	calls := make([]provider.ToolCall, 0, len(indexes))
-	for _, i := range indexes {
-		tc := *partial[i]
-		tc.Arguments = args[i].String()
-		calls = append(calls, tc)
-	}
-	send(ctx, ch, provider.Event{ToolCalls: calls, Usage: usage, Done: true})
-}
-
-func newSSEScanner(r io.Reader) *bufio.Scanner {
-	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	return s
 }

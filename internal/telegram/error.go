@@ -12,8 +12,13 @@ var (
 	httpStatusRE   = regexp.MustCompile(`(?i)HTTP\s+(\d{3})`)
 	providerURLRE  = regexp.MustCompile(`https?://[^\s:]+(?::\d+)?(?:/[^\s]*)?`)
 	knownProviders = []string{"anthropic", "google", "gemini", "openai", "openrouter", "groq", "ollama", "mistral", "xai"}
-	secretKeyRE    = regexp.MustCompile(`(?i)(sk-[a-zA-Z0-9_\-]{8,}|ghp_[a-zA-Z0-9]{8,}|xox[baprs]-[a-zA-Z0-9_\-]{8,})`)
+	secretKeyRE    = regexp.MustCompile(`(?i)(sk-[a-zA-Z0-9_\-]{8,}|ghp_[a-zA-Z0-9]{8,}|xox[baprs]-[a-zA-Z0-9_\-]{8,}|AIza[a-zA-Z0-9_\-]{12,}|bot\d{6,}:[a-zA-Z0-9_\-]{16,})`)
 )
+
+// RedactSecrets masks API keys and bot tokens in diagnostic logs and messages.
+func RedactSecrets(s string) string {
+	return redactSecrets(s)
+}
 
 func redactSecrets(s string) string {
 	return secretKeyRE.ReplaceAllStringFunc(s, func(m string) string {

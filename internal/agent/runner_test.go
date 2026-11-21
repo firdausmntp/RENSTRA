@@ -206,3 +206,21 @@ func TestTurnStatsFallbackEstimateWithoutUsage(t *testing.T) {
 		t.Fatalf("window default = %d, want 32000", stats.ContextWindow)
 	}
 }
+
+func TestEmptyModelResponseReturnsErrorAndNotSaved(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{{{Done: true}}}}
+	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
+	if _, err := r.Run(context.Background(), 1, "halo"); err == nil {
+		t.Fatal("diharapkan error ketika model memberi respons kosong")
+	}
+	msgs, err := s.Messages(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if m.Role == provider.RoleAssistant {
+			t.Fatalf("pesan assistant kosong tidak boleh tersimpan: %+v", m)
+		}
+	}
+}

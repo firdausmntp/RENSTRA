@@ -81,9 +81,9 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 	case "/version":
 		ver := opts.Version
 		if ver == "" {
-			ver = "v1.2.5"
+			ver = "v1.2.6"
 		}
-		fmt.Fprintf(out, "renstra %s\n", ver)
+		fmt.Fprintf(out, "%s⚡ renstra%s %s%s%s\n", cCyan, cReset, cGreen, ver, cReset)
 		return true
 	case "/usage":
 		today := time.Now().Format("2006-01-02")
@@ -125,9 +125,9 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 			return true
 		}
 		fmt.Fprintf(out, "%s╭─ Insights pemakaian%s\n", cCyan, cReset)
-		fmt.Fprintf(out, "  %-16s in=%-9d out=%-9d $%.4f\n", "Hari ini:", dayU.TokensIn, dayU.TokensOut, dayU.CostUSD)
-		fmt.Fprintf(out, "  %-16s in=%-9d out=%-9d $%.4f\n", "7 hari:", weekU.TokensIn, weekU.TokensOut, weekU.CostUSD)
-		fmt.Fprintf(out, "  %-16s in=%-9d out=%-9d $%.4f\n", "30 hari:", monthU.TokensIn, monthU.TokensOut, monthU.CostUSD)
+		fmt.Fprintf(out, "  %s%-16s%s in=%-9d out=%-9d %s$%.4f%s\n", cYellow, "Hari ini:", cReset, dayU.TokensIn, dayU.TokensOut, cGreen, dayU.CostUSD, cReset)
+		fmt.Fprintf(out, "  %s%-16s%s in=%-9d out=%-9d %s$%.4f%s\n", cYellow, "7 hari:", cReset, weekU.TokensIn, weekU.TokensOut, cGreen, weekU.CostUSD, cReset)
+		fmt.Fprintf(out, "  %s%-16s%s in=%-9d out=%-9d %s$%.4f%s\n", cYellow, "30 hari:", cReset, monthU.TokensIn, monthU.TokensOut, cGreen, monthU.CostUSD, cReset)
 		return true
 	case "/status":
 		printStatus(ctx, r, chatID, out, opts)
@@ -183,9 +183,29 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 		}
 		snap := r.Memory.Snapshot()
 		memLim, userLim := r.Memory.Limits()
-		fmt.Fprintf(out, "MEMORY (%d/%d):\n%s\n\nUSER (%d/%d):\n%s\n",
-			utf8.RuneCountInString(snap.Memory), memLim, strings.TrimSpace(snap.Memory),
-			utf8.RuneCountInString(snap.User), userLim, strings.TrimSpace(snap.User))
+		memBody := strings.TrimSpace(snap.Memory)
+		if memBody == "" {
+			memBody = cDim + "(kosong)" + cReset
+		}
+		userBody := strings.TrimSpace(snap.User)
+		if userBody == "" {
+			userBody = cDim + "(kosong)" + cReset
+		}
+		fmt.Fprintf(out, "%s╭─ MEMORY (%d/%d)%s\n%s\n\n%s╭─ USER (%d/%d)%s\n%s\n",
+			cCyan, utf8.RuneCountInString(snap.Memory), memLim, cReset, memBody,
+			cCyan, utf8.RuneCountInString(snap.User), userLim, cReset, userBody)
+		return true
+	case "/remember":
+		handleRememberCLI(r, arg, out)
+		return true
+	case "/export":
+		handleExportCLI(ctx, r, chatID, arg, out)
+		return true
+	case "/fallback":
+		handleFallbackCLI(r, arg, out)
+		return true
+	case "/logs":
+		handleLogsCLI(r, arg, out)
 		return true
 	case "/model":
 		if arg == "" {

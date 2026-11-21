@@ -34,6 +34,7 @@ type Config struct {
 	OnSeen        func(updateID int64)
 	OnAutoApprove func(chatID int64)
 	OnCallback    func(ctx context.Context, chatID, msgID int64, data string)
+	OnErrorLog    func(ctx context.Context, chatID int64, err error) string
 	Transcribe    func(ctx context.Context, audioPath string) (string, error)
 }
 
@@ -51,6 +52,7 @@ type Bot struct {
 	onSeen        func(int64)
 	onAutoApprove func(int64)
 	onCallback    func(context.Context, int64, int64, string)
+	onErrorLog    func(context.Context, int64, error) string
 	transcribe    func(context.Context, string) (string, error)
 	http          *http.Client
 
@@ -108,6 +110,7 @@ func New(cfg Config) (*Bot, error) {
 		onSeen:        cfg.OnSeen,
 		onAutoApprove: cfg.OnAutoApprove,
 		onCallback:    cfg.OnCallback,
+		onErrorLog:    cfg.OnErrorLog,
 		transcribe:    cfg.Transcribe,
 		http:          &http.Client{Timeout: poll + 30*time.Second},
 		seen:          map[int64]struct{}{},
@@ -284,13 +287,14 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 	if text == "" {
 		text = m.Caption
 	}
+	ctx = withReplyTarget(ctx, m.MessageID, m.MessageThreadID)
 
 	switch command(text) {
 	case "/start":
-		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, startText, defaultQuickMenu())
+		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, StartText, DefaultQuickMenu())
 		return
 	case "/help":
-		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, helpText, defaultQuickMenu())
+		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, HelpText, HelpQuickMenu())
 		return
 	case "/stop":
 		b.mu.Lock()
@@ -306,8 +310,9 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		return
 	}
 
-	hasAttachment := m.Document != nil || len(m.Photo) > 0 || m.Voice != nil || m.Audio != nil
-	if strings.TrimSpace(text) == "" && !hasAttachment {
+	hasAttachment := hasMsgAttachment(m)
+	hasReplyMedia := m.ReplyToMessage != nil && hasMsgAttachment(*m.ReplyToMessage)
+	if strings.TrimSpace(text) == "" && !hasAttachment && !hasReplyMedia {
 		return
 	}
 	if h == nil {
@@ -348,18 +353,36 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 			return
 		}
 	}
+	if m.ReplyToMessage != nil || m.Quote != nil {
+		var ok bool
+		text, ok = b.appendReplyContext(ctx, turnCtx, m, text)
+		if !ok {
+			return
+		}
+	}
 
 	out, err := h.Handle(turnCtx, m.Chat.ID, text)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(turnCtx.Err(), context.DeadlineExceeded) {
 			b.reply(ctx, m.Chat.ID, FormatError(err))
+			b.sendErrorLogIfAny(ctx, m.Chat.ID, err)
 			return
 		}
 		if turnCtx.Err() != nil {
 			return
 		}
 		b.reply(ctx, m.Chat.ID, FormatError(err))
+		b.sendErrorLogIfAny(ctx, m.Chat.ID, err)
 		return
 	}
 	b.reply(ctx, m.Chat.ID, out)
+}
+
+func (b *Bot) sendErrorLogIfAny(ctx context.Context, chatID int64, err error) {
+	if b.onErrorLog == nil || err == nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if logPath := b.onErrorLog(ctx, chatID, err); logPath != "" {
+		_ = b.SendDocument(ctx, chatID, logPath, "🪵 Log error diagnostik")
+	}
 }

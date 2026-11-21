@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.5-blue.svg?style=flat-square&logo=github" alt="Version v1.2.5" /></a>
+  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.6-blue.svg?style=flat-square&logo=github" alt="Version v1.2.6" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
   <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.4%20Rich%20Messages-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.4" />
@@ -212,10 +212,14 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 | `/config [key val]` | Mengubah pengaturan default (`auto_compact`, `compact_threshold`, `max_iterations`, `turn_timeout`, `warn_usd`, `max_usd`, `prompt_prefix`, `reset`) via tombol atau teks |
 | `/model` | Melihat model aktif, provider yang terpasang, dan daftar alias |
 | `/model <nama>` | Mengganti model aktif secara instan (contoh: `/model claude-3-5-sonnet` atau `/model groq:llama-3.3-70b`) |
+| `/fallback` | Melihat status Smart Fallback, circuit-breaker cooldown, auto-discovery multi-provider, dan tombol reset |
 | `/skills` | Menampilkan katalog skill yang sedang dimuat beserta lapisan sumbernya |
 | `/skills <nama>` | Menampilkan isi detail deskripsi dan instruksi dari skill tertentu |
 | `/skills reload` | Memindai ulang berkas `SKILL.md` dari disk tanpa perlu me-restart bot |
-| `/memory` | Menampilkan isi catatan kerja `MEMORY.md` & `USER.md` beserta kuota karakternya |
+| `/memory` | Menampilkan isi catatan kerja `MEMORY.md` & `USER.md` beserta tombol Clear/Refresh interaktif |
+| `/remember <catatan>` | Menyimpan catatan cepat ke `MEMORY.md` (`user:<catatan>` untuk `USER.md`), atau reply pesan apa pun dengan `/remember` |
+| `/export` | Mengekspor seluruh transkrip percakapan sesi aktif menjadi berkas Markdown (`.md`) |
+| `/logs [clear]` | Mengunduh file log error & diagnostik terbaru (otomatis dikirim saat error terjadi) |
 | `/cron` / `/cron list` | Menampilkan seluruh jadwal tugas otomatis yang terdaftar untuk chat ini |
 | `/cron add <jadwal> \| <prompt>` | Menambahkan tugas cron baru (contoh: `/cron add 0 8 * * * \| Ringkas email dan to-do list hari ini`) |
 | `/cron toggle <id>` | Mengaktifkan atau menonaktifkan jadwal cron tertentu |
@@ -234,10 +238,12 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 |---|---|
 | `renstra setup` | Wizard interaktif untuk membuat `config.yaml` dan menyimpan kredensial di `.env` |
 | `renstra serve` | Menjalankan gateway Telegram long polling + cron scheduler + client MCP |
+| `renstra restart [--start]` | Me-restart service systemd atau proses `renstra serve` yang sedang berjalan (jika ada) |
 | `renstra chat [model]` | REPL terminal interaktif dengan live metrics footer, syntax formatting, dan slash commands |
 | `renstra update [check]` | Memeriksa dan memperbarui binary RENSTRA ke versi rilis GitHub terbaru secara in-place |
 | `renstra migrate hermes` | Mengimpor memori, skills, config, server MCP, dan histori percakapan dari `~/.hermes` |
 | `renstra model list` | Menampilkan daftar provider yang aktif, base URL, konfigurasi, dan alias model |
+| `renstra model set <ref>` | Mengubah `default_model` di `config.yaml` (`model`, `provider:model`, atau `alias`) |
 | `renstra skill list [--global]` | Melihat daftar skill terdaftar beserta deteksi konflik prioritas antar lapis |
 | `renstra skill add <dir\|git-url>` | Mengimpor skill dari direktori lokal atau repositori Git |
 | `renstra skill rm <nama>` | Menghapus skill dari lapisan yang dapat ditulis |

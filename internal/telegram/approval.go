@@ -103,18 +103,22 @@ func (b *Bot) AskApproval(ctx context.Context, chatID int64, tool, args string, 
 			},
 		},
 	}
-	raw, err := b.post(ctx, "sendMessage", map[string]any{
+	payload := map[string]any{
 		"chat_id":      chatID,
 		"text":         htmlText,
 		"parse_mode":   "HTML",
 		"reply_markup": kb,
-	})
+	}
+	applyReplyTarget(ctx, payload)
+	raw, err := b.post(ctx, "sendMessage", payload)
 	if isHTTP400(err) {
-		raw, err = b.post(ctx, "sendMessage", map[string]any{
+		plain := map[string]any{
 			"chat_id":      chatID,
 			"text":         plainText,
 			"reply_markup": kb,
-		})
+		}
+		applyReplyTarget(ctx, plain)
+		raw, err = b.post(ctx, "sendMessage", plain)
 	}
 	if err != nil {
 		return false, err

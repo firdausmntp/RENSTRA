@@ -4,6 +4,30 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.2.6 (Fix Streaming JSON Chunk, Reply/Sub-Message Telegram, `/memory`, `/remember`, `/export`)
+
+- [x] **Perbaikan Error Streaming `chunk tidak valid: unexpected end of JSON input`**
+  - **Lokasi:** [`internal/provider/openai/client.go`](internal/provider/openai/client.go), [`internal/provider/openai/stream.go`](internal/provider/openai/stream.go), [`internal/provider/anthropic/stream.go`](internal/provider/anthropic/stream.go), [`internal/provider/google/stream.go`](internal/provider/google/stream.go)
+  - **Perbaikan:** Melewati baris `data:` kosong (*keepalive* SSE), menyangga (*buffer*) payload SSE JSON multi-baris sampai valid (`json.Valid` / baris kosong), serta fallback pembacaan respons JSON non-SSE pada HTTP 200.
+- [x] **Proteksi Respons Kosong dari Model**
+  - **Lokasi:** [`internal/agent/runner.go`](internal/agent/runner.go)
+  - **Perbaikan:** Menolak respons model yang tidak menghasilkan teks maupun `tool_calls` agar tidak menyimpan pesan asisten kosong ke SQLite.
+- [x] **Dukungan Penuh Sub-Message / Reply / Quote / Forum Thread Telegram**
+  - **Lokasi:** [`internal/telegram/types.go`](internal/telegram/types.go), [`internal/telegram/reply.go`](internal/telegram/reply.go), [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/telegram/send.go`](internal/telegram/send.go), [`internal/telegram/keyboard.go`](internal/telegram/keyboard.go), [`internal/telegram/approval.go`](internal/telegram/approval.go)
+  - **Fitur:** Menginjeksi isi `reply_to_message` & `quote` (termasuk unduh media dari pesan yang di-reply) ke konteks agent, serta mengirim balik balasan, dokumen, foto, dan kartu approval dengan `message_thread_id` & `reply_parameters`.
+- [x] **Manajemen Memori Interaktif (`/memory`, `/remember`), `/export` & Heading HTML**
+  - **Lokasi:** [`cmd/renstra/telegram_extras.go`](cmd/renstra/telegram_extras.go), [`cmd/renstra/telegram_handler.go`](cmd/renstra/telegram_handler.go), [`cmd/renstra/telegram_callbacks.go`](cmd/renstra/telegram_callbacks.go), [`internal/cli/export.go`](internal/cli/export.go), [`internal/telegram/format.go`](internal/telegram/format.go)
+  - **Fitur:** Menu `/memory` interaktif dengan tombol clear/refresh, perintah cepat `/remember` (+ shortcut reply pesan di Telegram), `/export` transkrip percakapan ke `.md`, dan rendering heading Markdown `#` menjadi `<b>` di Telegram.
+
+- [x] **Smart Fallback & Circuit Breaker Multi-Provider (`/fallback`)**
+  - **Lokasi:** [`internal/agent/smart_fallback.go`](internal/agent/smart_fallback.go), [`internal/agent/fallback.go`](internal/agent/fallback.go), [`cmd/renstra/providers.go`](cmd/renstra/providers.go), [`cmd/renstra/telegram_fallback.go`](cmd/renstra/telegram_fallback.go), [`internal/cli/export.go`](internal/cli/export.go)
+  - **Fitur:** Klasifikasi error (transient 429/5xx, auth/quota, context overflow, empty response), cooldown circuit-breaker per target dengan half-open recovery, routing sadar kapabilitas (vision & context window), auto-discovery multi-provider (`smart_fallback: true` / `fallbacks: [auto]`), serta menu interaktif `/fallback` di Telegram & CLI.
+- [x] **Set Model CLI & Resolusi Fleksibel, Warna CLI Windows VT & Tombol Back-to-Menu**
+  - **Lokasi:** [`internal/config/resolve.go`](internal/config/resolve.go), [`internal/config/save.go`](internal/config/save.go), [`cmd/renstra/commands_model.go`](cmd/renstra/commands_model.go), [`internal/cli/tty_windows.go`](internal/cli/tty_windows.go), [`cmd/renstra/telegram_callbacks.go`](cmd/renstra/telegram_callbacks.go)
+  - **Peningkatan:** Perintah `renstra model set <ref>` dan resolusi nama model tanpa prefix provider, aktivasi Virtual Terminal ANSI di Windows (`SetConsoleMode`) + pewarnaan subcommand CLI, perintah `renstra restart [--start]` untuk me-restart service/server aktif (`systemd` / PID), auto-kirim file log diagnostik saat error + `/logs`, perbaikan parser Markdown Telegram (`_italic_`, `__bold__`, `~~strike~~`, blockquote berformat, bullet `*`, anti nested `<b><b>`), serta tombol `⬅️ Menu` (`cmd:menu`) di semua submenu Telegram.
+
+---
+
 ## Rilis v1.2.5 (CLI Spinner & Warna, Telegram Approval Mode & Rich Approval Card)
 
 - [x] **CLI Lebih Berwarna & Animated Loading Spinner**

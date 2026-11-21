@@ -51,14 +51,21 @@ type messageGenerationStopped struct {
 }
 
 type message struct {
-	MessageID int64       `json:"message_id"`
-	Text      string      `json:"text"`
-	Caption   string      `json:"caption"`
-	Chat      chat        `json:"chat"`
-	Document  *tgDocument `json:"document"`
-	Photo     []tgPhoto   `json:"photo"`
-	Voice     *tgVoice    `json:"voice"`
-	Audio     *tgAudio    `json:"audio"`
+	MessageID       int64        `json:"message_id"`
+	MessageThreadID int64        `json:"message_thread_id"`
+	Text            string       `json:"text"`
+	Caption         string       `json:"caption"`
+	Chat            chat         `json:"chat"`
+	ReplyToMessage  *message     `json:"reply_to_message"`
+	Quote           *tgTextQuote `json:"quote"`
+	Document        *tgDocument  `json:"document"`
+	Photo           []tgPhoto    `json:"photo"`
+	Voice           *tgVoice     `json:"voice"`
+	Audio           *tgAudio     `json:"audio"`
+}
+
+type tgTextQuote struct {
+	Text string `json:"text"`
 }
 
 type tgVoice struct {

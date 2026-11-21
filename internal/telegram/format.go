@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"fmt"
 	"html"
 	"regexp"
 	"strings"
@@ -11,19 +12,25 @@ var (
 	mdBlockquoteRE = regexp.MustCompile(`(?m)^(?:>[ \t]?.*(?:\r?\n|$))+`)
 	mdInlineCodeRE = regexp.MustCompile("`([^`\n]+)`")
 	mdLinkRE       = regexp.MustCompile(`\[([^\]\n]+)\]\((https?://[^\s)]+)\)`)
-	mdBoldRE       = regexp.MustCompile(`\*\*([^\n*]+?)\*\*`)
-	mdItalicRE     = regexp.MustCompile(`\*([^\s*][^*\n]*?[^\s*]|[^\s*])\*`)
+	mdBulletRE     = regexp.MustCompile(`(?m)^([ \t]*)\*[ \t]+`)
+	mdRuleRE       = regexp.MustCompile(`(?m)^(?:---+|===+|\*\*\*+)[ \t]*$`)
+	mdHeadingRE    = regexp.MustCompile(`(?m)^#{1,6}[ \t]+(.+)$`)
+	mdBoldStarRE   = regexp.MustCompile(`\*\*((?:[^\n*]|\*[^*])+?)\*\*`)
+	mdBoldUnderRE  = regexp.MustCompile(`__([^\n_]+?)__`)
+	mdStrikeRE     = regexp.MustCompile(`~~([^\n~]+?)~~`)
+	mdItalicStarRE = regexp.MustCompile(`\*([^\s*<>][^*<>\n]*?[^\s*<>]|[^\s*<>])\*`)
+	mdItalicUnder  = regexp.MustCompile(`(^|[\s(\["'.,!?])_([^\s_<>\n][^_<>\n]*?[^\s_<>\n]|[^\s_<>\n])_($|[\s)\]"'.,!?;:\-])`)
 )
 
-// markdownToHTML converts common Markdown (code blocks, inline code, links,
-// bold, italic) into Telegram-safe HTML while escaping raw HTML characters and
-// leaving snake_case identifiers untouched.
+// markdownToHTML converts Markdown (code blocks, blockquotes, inline code,
+// links, headings, lists, bold, italic, strikethrough) into valid Telegram HTML
+// while escaping raw HTML characters and leaving snake_case untouched.
 func markdownToHTML(s string) string {
 	var slots []string
 	stash := func(rendered string) string {
 		idx := len(slots)
 		slots = append(slots, rendered)
-		return "\x00SLOT" + string(rune('A'+idx/26)) + string(rune('A'+idx%26)) + "\x00"
+		return fmt.Sprintf("\x00SLOT%04d\x00", idx)
 	}
 
 	// 1. Stash fenced code blocks first so inner markdown is never touched.
@@ -37,7 +44,7 @@ func markdownToHTML(s string) string {
 		return stash("<pre>" + code + "</pre>")
 	})
 
-	// 2. Stash blockquotes.
+	// 2. Stash blockquotes, formatting inner inline markdown cleanly.
 	out = mdBlockquoteRE.ReplaceAllStringFunc(out, func(m string) string {
 		lines := strings.Split(m, "\n")
 		var clean []string
@@ -48,37 +55,73 @@ func markdownToHTML(s string) string {
 			}
 			line = strings.TrimPrefix(line, ">")
 			line = strings.TrimPrefix(line, " ")
-			clean = append(clean, html.EscapeString(line))
+			clean = append(clean, formatInlineSegment(line, stash))
 		}
 		if len(clean) == 0 {
 			return ""
 		}
-		return stash("<blockquote>" + strings.Join(clean, "\n") + "</blockquote>\n")
+		return stash("<blockquote>" + strings.Join(clean, "\n") + "</blockquote>") + "\n"
 	})
 
-	// 3. Stash inline code.
-	out = mdInlineCodeRE.ReplaceAllStringFunc(out, func(m string) string {
+	// 3. Format remaining document body.
+	out = formatBodySegment(out, stash)
+
+	// 4. Restore stashed HTML blocks (inner blocks may reference earlier slots).
+	for i := len(slots) - 1; i >= 0; i-- {
+		key := fmt.Sprintf("\x00SLOT%04d\x00", i)
+		out = strings.ReplaceAll(out, key, slots[i])
+	}
+	return out
+}
+
+func formatInlineSegment(s string, stash func(string) string) string {
+	out := mdInlineCodeRE.ReplaceAllStringFunc(s, func(m string) string {
 		sub := mdInlineCodeRE.FindStringSubmatch(m)
 		return stash("<code>" + html.EscapeString(sub[1]) + "</code>")
 	})
+	out = mdLinkRE.ReplaceAllStringFunc(out, func(m string) string {
+		sub := mdLinkRE.FindStringSubmatch(m)
+		return stash("<a href=\"" + html.EscapeString(sub[2]) + "\">" + html.EscapeString(sub[1]) + "</a>")
+	})
+	out = html.EscapeString(out)
+	out = mdBoldStarRE.ReplaceAllString(out, "<b>$1</b>")
+	out = mdBoldUnderRE.ReplaceAllString(out, "<b>$1</b>")
+	out = mdStrikeRE.ReplaceAllString(out, "<s>$1</s>")
+	out = mdItalicStarRE.ReplaceAllString(out, "<i>$1</i>")
+	out = mdItalicUnder.ReplaceAllString(out, "$1<i>$2</i>$3")
+	return out
+}
 
-	// 4. Stash links.
+func formatBodySegment(s string, stash func(string) string) string {
+	out := mdInlineCodeRE.ReplaceAllStringFunc(s, func(m string) string {
+		sub := mdInlineCodeRE.FindStringSubmatch(m)
+		return stash("<code>" + html.EscapeString(sub[1]) + "</code>")
+	})
 	out = mdLinkRE.ReplaceAllStringFunc(out, func(m string) string {
 		sub := mdLinkRE.FindStringSubmatch(m)
 		return stash("<a href=\"" + html.EscapeString(sub[2]) + "\">" + html.EscapeString(sub[1]) + "</a>")
 	})
 
-	// 5. Escape remaining plain text HTML entities.
 	out = html.EscapeString(out)
+	out = mdRuleRE.ReplaceAllString(out, "────────")
+	out = mdBulletRE.ReplaceAllString(out, "$1• ")
 
-	// 6. Bold & italic on escaped text.
-	out = mdBoldRE.ReplaceAllString(out, "<b>$1</b>")
-	out = mdItalicRE.ReplaceAllString(out, "<i>$1</i>")
+	// Convert headings first & stash them so **bold** inside headings never
+	// creates invalid nested <b><b>...</b></b> tags in Telegram HTML.
+	out = mdHeadingRE.ReplaceAllStringFunc(out, func(m string) string {
+		sub := mdHeadingRE.FindStringSubmatch(m)
+		inner := strings.TrimSpace(sub[1])
+		inner = mdBoldStarRE.ReplaceAllString(inner, "$1")
+		inner = mdBoldUnderRE.ReplaceAllString(inner, "$1")
+		inner = mdItalicStarRE.ReplaceAllString(inner, "<i>$1</i>")
+		inner = mdItalicUnder.ReplaceAllString(inner, "$1<i>$2</i>$3")
+		return stash("<b>" + inner + "</b>")
+	})
 
-	// 7. Restore stashed HTML blocks.
-	for i, val := range slots {
-		key := "\x00SLOT" + string(rune('A'+i/26)) + string(rune('A'+i%26)) + "\x00"
-		out = strings.ReplaceAll(out, key, val)
-	}
+	out = mdBoldStarRE.ReplaceAllString(out, "<b>$1</b>")
+	out = mdBoldUnderRE.ReplaceAllString(out, "<b>$1</b>")
+	out = mdStrikeRE.ReplaceAllString(out, "<s>$1</s>")
+	out = mdItalicStarRE.ReplaceAllString(out, "<i>$1</i>")
+	out = mdItalicUnder.ReplaceAllString(out, "$1<i>$2</i>$3")
 	return out
 }

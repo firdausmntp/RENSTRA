@@ -10,8 +10,8 @@ import (
 // memakai markdown yang didukung markdownToHTML dan terkonversi jadi HTML
 // Telegram yang valid (tanpa sisa ** atau * mentah).
 func TestStartHelpMarkdownConversion(t *testing.T) {
-	startHTML := markdownToHTML(startText)
-	helpHTML := markdownToHTML(helpText)
+	startHTML := markdownToHTML(StartText)
+	helpHTML := markdownToHTML(HelpText)
 
 	for name, html := range map[string]string{"start": startHTML, "help": helpHTML} {
 		if strings.Contains(html, "**") {

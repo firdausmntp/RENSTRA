@@ -94,3 +94,51 @@ TEST_RENSTRA_KEY_C='secret789'
 		t.Errorf("KEY_C = %q, want secret789", got)
 	}
 }
+
+func TestResolvePlainModelAndSetDefaultModel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", dir)
+
+	yamlContent := `
+default_model: "oai:gpt-4o-mini"
+providers:
+  oai:
+    kind: "openai"
+    base_url: "https://api.openai.com/v1"
+    default_model: "gpt-4o-mini"
+  ant:
+    kind: "anthropic"
+    base_url: "https://api.anthropic.com"
+    default_model: "claude-3-5-sonnet"
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(yamlContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Plain model without prefix resolves via model prefix inference or default provider
+	p, m, err := config.Resolve("claude-sonnet-4-5", cfg)
+	if err != nil || p.Kind != "anthropic" || m != "claude-sonnet-4-5" {
+		t.Fatalf("Resolve(claude-sonnet-4-5) = %q/%q err=%v", p.Kind, m, err)
+	}
+	p2, m2, err := config.Resolve("gpt-4o", cfg)
+	if err != nil || p2.Kind != "openai" || m2 != "gpt-4o" {
+		t.Fatalf("Resolve(gpt-4o) = %q/%q err=%v", p2.Kind, m2, err)
+	}
+
+	// SetDefaultModel persists to config.yaml
+	model, stored, err := config.SetDefaultModel("gpt-4o")
+	if err != nil || model != "gpt-4o" || stored != "oai:gpt-4o" {
+		t.Fatalf("SetDefaultModel = %q/%q err=%v", model, stored, err)
+	}
+	reloaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.DefaultModel != "oai:gpt-4o" {
+		t.Fatalf("reloaded DefaultModel = %q, want oai:gpt-4o", reloaded.DefaultModel)
+	}
+}

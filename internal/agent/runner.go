@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -60,6 +61,7 @@ type Runner struct {
 	mu           sync.Mutex
 	cachedPrompt string
 	locks        *chatLockRegistry
+	fbHealth     *fallbackHealth
 }
 
 // Run executes one user turn.
@@ -219,6 +221,10 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 				r.savePartial(chatID, text)
 			}
 			return text, streamErr
+		}
+
+		if len(calls) == 0 && strings.TrimSpace(text) == "" {
+			return "", errors.New("model mengembalikan respons kosong; silakan coba ulang atau ganti model")
 		}
 
 		assistant := provider.Message{Role: provider.RoleAssistant, Content: text, ToolCalls: calls}

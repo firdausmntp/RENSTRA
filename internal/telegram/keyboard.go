@@ -21,18 +21,22 @@ func (b *Bot) SendMessageWithKeyboard(ctx context.Context, chatID int64, text st
 		return errors.New("telegram: teks kosong")
 	}
 	kb := map[string]any{"inline_keyboard": rows}
-	_, err := b.post(ctx, "sendMessage", map[string]any{
+	payload := map[string]any{
 		"chat_id":      chatID,
 		"text":         markdownToHTML(text),
 		"parse_mode":   "HTML",
 		"reply_markup": kb,
-	})
+	}
+	applyReplyTarget(ctx, payload)
+	_, err := b.post(ctx, "sendMessage", payload)
 	if isHTTP400(err) {
-		_, err = b.post(ctx, "sendMessage", map[string]any{
+		plainPayload := map[string]any{
 			"chat_id":      chatID,
 			"text":         text,
 			"reply_markup": kb,
-		})
+		}
+		applyReplyTarget(ctx, plainPayload)
+		_, err = b.post(ctx, "sendMessage", plainPayload)
 	}
 	return err
 }
@@ -72,7 +76,8 @@ func (b *Bot) EditMessageWithKeyboard(ctx context.Context, chatID, messageID int
 	return err
 }
 
-func defaultQuickMenu() [][]InlineButton {
+// DefaultQuickMenu returns the main navigation inline keyboard shown on /start and Back-to-Menu.
+func DefaultQuickMenu() [][]InlineButton {
 	return [][]InlineButton{
 		{
 			{Text: "🤖 Pilih Model", CallbackData: "cmd:model", Style: "primary"},
@@ -80,9 +85,27 @@ func defaultQuickMenu() [][]InlineButton {
 		},
 		{
 			{Text: "🛠 Skills", CallbackData: "cmd:skills", Style: "success"},
+			{Text: "🧠 Memory", CallbackData: "cmd:memory", Style: "primary"},
 			{Text: "⏰ Cron", CallbackData: "cmd:cron", Style: "primary"},
+		},
+		{
 			{Text: "⚙️ Config", CallbackData: "cmd:config", Style: "primary"},
 			{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+			{Text: "📖 Bantuan", CallbackData: "cmd:help", Style: "primary"},
+		},
+	}
+}
+
+// HelpQuickMenu returns navigation buttons shown beneath /help.
+func HelpQuickMenu() [][]InlineButton {
+	return [][]InlineButton{
+		{
+			{Text: "🤖 Pilih Model", CallbackData: "cmd:model", Style: "primary"},
+			{Text: "⚙️ Config", CallbackData: "cmd:config", Style: "primary"},
+			{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+		},
+		{
+			{Text: "🏠 Kembali ke Menu", CallbackData: "cmd:menu", Style: "primary"},
 		},
 	}
 }

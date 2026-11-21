@@ -66,6 +66,7 @@ func serveCmd() error {
 	_ = st.PruneUpdatesSeen(ctx)
 	recentIDs, _ := st.RecentUpdateIDs(ctx, 500)
 	var handler *telegramHandler
+	errLog := newErrorLogRecorder(home, version)
 	bot, err := telegram.New(telegram.Config{
 		Token:        token,
 		AllowedUsers: allowedUsers,
@@ -87,6 +88,13 @@ func serveCmd() error {
 			if handler != nil {
 				handler.HandleCallback(cctx, cid, mid, data)
 			}
+		},
+		OnErrorLog: func(ectx context.Context, cid int64, e error) string {
+			modelName := ""
+			if handler != nil {
+				modelName = handler.runnerForChat(ectx, cid).GetModel()
+			}
+			return errLog.recordAndWriteSnapshot(cid, modelName, e)
 		},
 		Transcribe: buildTranscriber(cfg),
 	})
@@ -207,6 +215,7 @@ func serveCmd() error {
 		runner:          runner,
 		store:           st,
 		cfg:             cfg,
+		errLog:          errLog,
 		approvalTimeout: approvalWait,
 	}
 	runner.Approve = func(actx context.Context, name string, args json.RawMessage) (bool, error) {
@@ -253,6 +262,10 @@ func serveCmd() error {
 			_ = bot.SendMessage(cctx, job.ChatID, ans)
 		}, 30*time.Second)
 	}()
+
+	if cleanupPID, err := writePIDFile(home); err == nil {
+		defer cleanupPID()
+	}
 
 	fmt.Printf("renstra gateway berjalan (model: %s). Tekan Ctrl+C untuk berhenti.\n", model)
 	return bot.Run(ctx, handler)

@@ -181,6 +181,7 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "🔄 Reset Default", CallbackData: fmt.Sprintf("cfg:reset:%d", page), Style: "danger"},
 		{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+		{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 	})
 	return text, rows
 }

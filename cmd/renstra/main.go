@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -21,7 +20,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.2.5"
+var version = "v1.2.6"
 
 func main() {
 	args := os.Args[1:]
@@ -39,6 +38,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "restart":
+		if err := restartCmd(args[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
 	case "chat":
 		if err := chatCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -50,12 +54,11 @@ func main() {
 			os.Exit(1)
 		}
 	case "model":
-		if len(args) > 1 && args[1] == "list" {
-			modelListCmd()
-			return
+		if err := modelCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
 		}
-		fmt.Fprintln(os.Stderr, "pemakaian: renstra model list")
-		os.Exit(2)
+		return
 	case "skill":
 		if err := skillCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -81,7 +84,8 @@ func main() {
 	case "help", "-h", "--help":
 		cli.PrintCLIUsage(os.Stdout, detectLang(args[1:]), version)
 	case "version", "-v", "--version":
-		fmt.Println("renstra", version)
+		out := cli.Writer(os.Stdout)
+		fmt.Fprintf(out, "%s⚡ renstra%s %s%s%s\n", cli.ColorCyan, cli.ColorReset, cli.ColorGreen, version, cli.ColorReset)
 	default:
 		fmt.Fprintf(os.Stderr, "perintah tidak dikenal: %s\n\n", args[0])
 		cli.PrintCLIUsage(os.Stderr, detectLang(args[1:]), version)
@@ -117,57 +121,12 @@ func usage() {
 
 func configCmd(args []string) {
 	if len(args) > 0 && args[0] == "path" {
-		fmt.Println(config.Home())
+		out := cli.Writer(os.Stdout)
+		fmt.Fprintf(out, "%s%s%s\n", cli.ColorCyan, config.Home(), cli.ColorReset)
 		return
 	}
 	fmt.Fprintln(os.Stderr, "pemakaian: renstra config path")
 	os.Exit(2)
-}
-
-// modelListText renders configured providers, their models, and aliases for
-// the CLI /model listing (mirrors the Telegram /model output).
-func modelListText(cfg *config.Config) string {
-	if cfg == nil || (len(cfg.Providers) == 0 && len(cfg.Aliases) == 0) {
-		return ""
-	}
-	var b strings.Builder
-	if len(cfg.Providers) > 0 {
-		b.WriteString("\nProvider & model terkonfigurasi:\n")
-		pnames := make([]string, 0, len(cfg.Providers))
-		for n := range cfg.Providers {
-			pnames = append(pnames, n)
-		}
-		sort.Strings(pnames)
-		for _, pn := range pnames {
-			pc := cfg.Providers[pn]
-			kind := pc.Kind
-			if kind == "" {
-				kind = "openai"
-			}
-			fmt.Fprintf(&b, "  %-12s (%s) default=%s", pn, kind, pc.DefaultModel)
-			if len(pc.Models) > 0 {
-				mnames := make([]string, 0, len(pc.Models))
-				for mn := range pc.Models {
-					mnames = append(mnames, mn)
-				}
-				sort.Strings(mnames)
-				fmt.Fprintf(&b, " [%s]", strings.Join(mnames, ", "))
-			}
-			b.WriteString("\n")
-		}
-	}
-	if len(cfg.Aliases) > 0 {
-		b.WriteString("\nAlias:\n")
-		anames := make([]string, 0, len(cfg.Aliases))
-		for a := range cfg.Aliases {
-			anames = append(anames, a)
-		}
-		sort.Strings(anames)
-		for _, a := range anames {
-			fmt.Fprintf(&b, "  %-12s -> %s\n", a, cfg.Aliases[a])
-		}
-	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 func chatCmd(args []string) error {
@@ -322,7 +281,7 @@ func chatCmd(args []string) error {
 			nextMC := nextPCfg.ModelConfig(nextModel)
 			r.SetModel(nextProv, nextModel, nextMC.MaxOutput, nextMC.Context, nextMC.PriceIn, nextMC.PriceOut)
 			r.SetCapabilities(nextMC.Vision, nextMC.Tools != nil && !*nextMC.Tools)
-			_ = st.SetChatModel(context.Background(), 1, nextModel)
+			_ = st.SetChatModel(context.Background(), 1, ref)
 			return fmt.Sprintf("Model aktif diganti ke: %s", nextModel), nil
 		},
 	})

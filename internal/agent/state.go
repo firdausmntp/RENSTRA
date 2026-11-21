@@ -54,6 +54,43 @@ func (r *Runner) lockRegistry() *chatLockRegistry {
 	return r.locks
 }
 
+func (r *Runner) healthRegistry() *fallbackHealth {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fbHealth == nil {
+		r.fbHealth = newFallbackHealth()
+	}
+	return r.fbHealth
+}
+
+// FallbackStatus returns live circuit-breaker health for primary and fallback targets.
+func (r *Runner) FallbackStatus() []FallbackTargetStatus {
+	h := r.healthRegistry()
+	primary := r.primaryTarget()
+	raw := make([]FallbackTarget, 0, 1+len(r.Fallbacks))
+	raw = append(raw, primary)
+	raw = append(raw, r.Fallbacks...)
+	seen := map[string]bool{}
+	var out []FallbackTargetStatus
+	for _, t := range raw {
+		if t.Provider == nil || t.Model == "" {
+			continue
+		}
+		k := targetKey(t)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, h.statusFor(t))
+	}
+	return out
+}
+
+// ResetFallbacks clears all circuit-breaker cooldowns on primary and fallback targets.
+func (r *Runner) ResetFallbacks() {
+	r.healthRegistry().reset()
+}
+
 // Clone returns a shallow copy of Runner with isolated mutable model state
 // while sharing stores, tools, fallbacks, logger, and chat locks.
 func (r *Runner) Clone() *Runner {
@@ -61,6 +98,9 @@ func (r *Runner) Clone() *Runner {
 	defer r.mu.Unlock()
 	if r.locks == nil {
 		r.locks = newChatLockRegistry()
+	}
+	if r.fbHealth == nil {
+		r.fbHealth = newFallbackHealth()
 	}
 	return &Runner{
 		Provider:           r.Provider,
@@ -95,6 +135,7 @@ func (r *Runner) Clone() *Runner {
 		SubagentCall:       r.SubagentCall,
 		Logger:             r.Logger,
 		locks:              r.locks,
+		fbHealth:           r.fbHealth,
 	}
 }
 

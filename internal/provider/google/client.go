@@ -1,7 +1,6 @@
 package google
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -293,77 +292,4 @@ func (c *Client) buildRequest(req provider.Request) geminiRequest {
 		out.Tools = []geminiTool{{FunctionDeclarations: decls}}
 	}
 	return out
-}
-
-func (c *Client) consume(ctx context.Context, r io.Reader, ch chan<- provider.Event) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-
-	var calls []provider.ToolCall
-	var usage *provider.Usage
-	callIdx := 0
-
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var chunk geminiChunk
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("google: chunk tidak valid: %w", err)})
-			return
-		}
-		if chunk.Error != nil {
-			send(ctx, ch, provider.Event{Err: fmt.Errorf("google: %s", chunk.Error.Message)})
-			return
-		}
-		if chunk.UsageMetadata != nil {
-			usage = &provider.Usage{
-				InputTokens:  chunk.UsageMetadata.PromptTokenCount,
-				OutputTokens: chunk.UsageMetadata.CandidatesTokenCount,
-			}
-		}
-		for _, cand := range chunk.Candidates {
-			for _, part := range cand.Content.Parts {
-				if part.Text != "" {
-					if !send(ctx, ch, provider.Event{Text: part.Text}) {
-						return
-					}
-				}
-				if part.FunctionCall != nil {
-					callIdx++
-					args := "{}"
-					if len(part.FunctionCall.Args) > 0 {
-						args = string(part.FunctionCall.Args)
-					}
-					calls = append(calls, provider.ToolCall{
-						ID:        fmt.Sprintf("gemini_%d", callIdx),
-						Name:      part.FunctionCall.Name,
-						Arguments: args,
-					})
-				}
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		if ctx.Err() != nil {
-			return
-		}
-		send(ctx, ch, provider.Event{Err: err})
-		return
-	}
-	send(ctx, ch, provider.Event{ToolCalls: calls, Usage: usage, Done: true})
-}
-
-func send(ctx context.Context, ch chan<- provider.Event, ev provider.Event) bool {
-	select {
-	case ch <- ev:
-		return true
-	case <-ctx.Done():
-		return false
-	}
 }

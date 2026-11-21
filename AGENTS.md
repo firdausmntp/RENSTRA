@@ -184,9 +184,14 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.2.5)
+## 7. Status Rilis & Pengembangan (v1.2.6)
 
-Fitur v1.2.5 telah diimplementasikan:
+Fitur v1.2.6 telah diimplementasikan:
+1. **Perbaikan SSE Streaming & Empty Response Guard:** Melewati `data:` keepalive kosong, buffering payload SSE multi-baris di provider OpenAI/Anthropic/Google, fallback JSON non-SSE pada HTTP 200, dan validasi respons kosong di `Runner`.
+2. **Dukungan Sub-Message, Reply, Quote & Thread Telegram:** Context injection untuk `reply_to_message` & `quote` (termasuk lampiran media) serta pengiriman balik `message_thread_id` dan `reply_parameters` across text, rich messages, media, keyboard, dan approval.
+3. **Fitur Baru (`/remember`, `/export`, Menu `/memory`, `/fallback`, Markdown Heading, CLI & Navigasi):** Penyimpanan cepat ke `MEMORY.md`/`USER.md`, export transkrip sesi ke `.md`, menu `/memory` & `/fallback` (Smart Fallback dengan circuit-breaker, context/vision routing, dan auto-discovery), heading `#` menjadi `<b>`, `renstra model set`, aktivasi VT ANSI Windows, serta tombol `⬅️ Menu` di seluruh submenu Telegram.
+
+Fitur v1.2.5 sebelumnya:
 1. **CLI Lebih Berwarna & Animated Loading Spinner:** `cliStreamWriter` menampilkan spinner animasi (`⠋⠙⠹...`) dan pesan status (`Menghubungi model...`, `Menjalankan <tool>...`), indikator konteks berwarna (hijau/kuning/merah), serta pause/resume otomatis saat konfirmasi approval CLI.
 2. **Approval Mode & Auto-Approve di Telegram & CLI (`/approval`):** Mendukung pergantian mode approval per chat (`prompt`, `auto`, `deny`) yang persisten di SQLite (`kv`), lengkap dengan tombol cepat `⚡ Auto-Approve Chat Ini` pada keyboard inline Telegram.
 3. **Desain Ulang Pesan Approval Telegram:** Pesan konfirmasi tool kini dirender dengan format HTML rapi (ekstraksi perintah `terminal` ke blok `<pre><code class="language-bash">`, pretty-print JSON untuk tool lain, badge status `✅`/`❌`/`⚡`/`⌛`/`🛑`).

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -57,8 +58,42 @@ func buildProvider(pcfg config.ProviderConfig) (provider.Provider, error) {
 }
 
 func buildFallbacks(cfg *config.Config) []agent.FallbackTarget {
+	if cfg == nil {
+		return nil
+	}
+	var refs []string
+	seenRef := map[string]bool{}
+	for _, raw := range cfg.Fallbacks {
+		ref := strings.TrimSpace(raw)
+		if ref == "" || strings.EqualFold(ref, "auto") || seenRef[ref] {
+			continue
+		}
+		seenRef[ref] = true
+		refs = append(refs, ref)
+	}
+
+	if cfg.SmartFallbackEnabled() && len(cfg.Providers) > 1 {
+		pnames := make([]string, 0, len(cfg.Providers))
+		for n := range cfg.Providers {
+			pnames = append(pnames, n)
+		}
+		sort.Strings(pnames)
+		for _, pn := range pnames {
+			pc := cfg.Providers[pn]
+			if pc.DefaultModel == "" {
+				continue
+			}
+			ref := pn + ":" + pc.DefaultModel
+			if !seenRef[ref] && !seenRef[pn] && ref != cfg.DefaultModel {
+				seenRef[ref] = true
+				refs = append(refs, ref)
+			}
+		}
+	}
+
 	var targets []agent.FallbackTarget
-	for _, ref := range cfg.Fallbacks {
+	seenTarget := map[string]bool{}
+	for _, ref := range refs {
 		pcfg, model, err := config.Resolve(ref, cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "peringatan fallback %q tidak valid: %v\n", ref, err)
@@ -69,6 +104,11 @@ func buildFallbacks(cfg *config.Config) []agent.FallbackTarget {
 			fmt.Fprintf(os.Stderr, "peringatan build provider fallback %q: %v\n", ref, err)
 			continue
 		}
+		key := prov.Name() + ":" + model
+		if seenTarget[key] {
+			continue
+		}
+		seenTarget[key] = true
 		mc := pcfg.ModelConfig(model)
 		targets = append(targets, agent.FallbackTarget{
 			Provider:      prov,

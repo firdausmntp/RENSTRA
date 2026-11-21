@@ -21,6 +21,7 @@ type telegramHandler struct {
 	runner          *agent.Runner
 	store           *store.Store
 	cfg             *config.Config
+	errLog          *errorLogRecorder
 	approvalTimeout time.Duration
 
 	mu    sync.Mutex
@@ -221,6 +222,12 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version), nil
 
 	case "/memory":
+		mText, rows := h.buildMemoryMenu()
+		if h.bot != nil && len(rows) > 0 {
+			if err := h.bot.SendMessageWithKeyboard(ctx, chatID, mText, rows); err == nil {
+				return "", nil
+			}
+		}
 		if h.runner.Memory == nil {
 			return "Memory store tidak aktif.", nil
 		}
@@ -237,6 +244,24 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		return fmt.Sprintf("MEMORY (%d/%d char):\n%s\n\nUSER PROFILE (%d/%d char):\n%s",
 			utf8.RuneCountInString(snap.Memory), memLim, memText,
 			utf8.RuneCountInString(snap.User), userLim, userText), nil
+
+	case "/remember":
+		return h.handleRememberCmd(arg)
+
+	case "/export":
+		return h.handleExportCmd(ctx, chatID)
+
+	case "/logs":
+		return h.handleLogsCmd(ctx, chatID, arg)
+
+	case "/fallback":
+		if arg == "" && h.bot != nil {
+			fText, rows := h.buildFallbackMenu(ctx, chatID)
+			if err := h.bot.SendMessageWithKeyboard(ctx, chatID, fText, rows); err == nil {
+				return "", nil
+			}
+		}
+		return h.handleFallbackCmd(ctx, chatID, arg)
 
 	case "/cron":
 		if (arg == "" || strings.EqualFold(arg, "list")) && h.bot != nil {
@@ -336,47 +361,4 @@ func (h *telegramHandler) handleModelCmd(ctx context.Context, chatID int64, arg 
 		return strings.TrimRight(b.String(), "\n"), nil
 	}
 	return h.switchChatModel(ctx, chatID, arg)
-}
-
-func (h *telegramHandler) handleSkillsCmd(arg string) (string, error) {
-	if h.runner.Skills == nil {
-		return "Skill registry tidak aktif.", nil
-	}
-	reloaded := false
-	if strings.EqualFold(arg, "reload") {
-		h.invalidateAllPrompts()
-		reloaded = true
-	} else if arg != "" {
-		sk, ok := h.runner.Skills.Get(arg)
-		if !ok {
-			return fmt.Sprintf("Skill %q tidak ditemukan; ketik /skills untuk daftar", arg), nil
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "🛠 **Skill: %s**\n", sk.Name)
-		if sk.Description != "" {
-			fmt.Fprintf(&b, "*%s*\n", sk.Description)
-		}
-		fmt.Fprintf(&b, "Path: `%s`\n\n", sk.Path)
-		b.WriteString(strings.TrimSpace(sk.Body))
-		return b.String(), nil
-	}
-	idx := strings.TrimSpace(h.runner.Skills.Index())
-	var b strings.Builder
-	if reloaded {
-		b.WriteString("Skill dimuat ulang dari disk.\n")
-	}
-	if idx == "" {
-		b.WriteString("(belum ada skill terdaftar)")
-	} else {
-		b.WriteString("Skills terdaftar:\n")
-		b.WriteString(idx)
-		b.WriteString("\n\n💡 Lihat detail skill: `/skills <nama>` • Muat ulang: `/skills reload`")
-	}
-	if conflicts := h.runner.Skills.Conflicts(); len(conflicts) > 0 {
-		b.WriteString("\n\nKonflik nama (lapis atas menang):\n")
-		for _, c := range conflicts {
-			fmt.Fprintf(&b, "- %s: %s (menutupi %s)\n", c.Name, c.WinnerDir, c.ShadowedDir)
-		}
-	}
-	return strings.TrimRight(b.String(), "\n"), nil
 }

@@ -128,6 +128,7 @@ func (h *telegramHandler) buildModelMenu(ctx context.Context, chatID int64, page
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "🔄 Refresh", CallbackData: fmt.Sprintf("mdl:p:%d", page), Style: "primary"},
 		{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+		{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 	})
 	return b.String(), rows
 }
@@ -157,6 +158,7 @@ func (h *telegramHandler) buildApprovalMenu(ctx context.Context, chatID int64) (
 		},
 		{
 			{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+			{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 		},
 	}
 	return text, rows
@@ -210,6 +212,7 @@ func (h *telegramHandler) buildSkillsMenu(page int) (string, [][]telegram.Inline
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "🔄 Reload Disk", CallbackData: fmt.Sprintf("skl:r:%d", page), Style: "success"},
 		{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+		{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 	})
 	return b.String(), rows
 }
@@ -263,6 +266,7 @@ func (h *telegramHandler) buildCronMenu(ctx context.Context, chatID int64, page 
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "🔄 Refresh", CallbackData: fmt.Sprintf("crn:p:%d", page), Style: "primary"},
 		{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
+		{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 	})
 	return b.String(), rows
 }
@@ -291,13 +295,18 @@ func (h *telegramHandler) buildStatusMenu(ctx context.Context, chatID int64) (st
 	rows := [][]telegram.InlineButton{
 		{
 			{Text: "🤖 Ganti Model", CallbackData: "cmd:model", Style: "primary"},
-			{Text: "🔐 Mode Approval", CallbackData: "cmd:approval", Style: "primary"},
+			{Text: "🛡️ Fallback", CallbackData: "cmd:fallback", Style: "primary"},
+			{Text: "🔐 Approval", CallbackData: "cmd:approval", Style: "primary"},
 		},
 		{
 			{Text: "🛠 Skills", CallbackData: "cmd:skills", Style: "success"},
+			{Text: "🧠 Memory", CallbackData: "cmd:memory", Style: "primary"},
 			{Text: "⏰ Cron", CallbackData: "cmd:cron", Style: "primary"},
 			{Text: "⚙️ Config", CallbackData: "cmd:config", Style: "primary"},
+		},
+		{
 			{Text: "🔄 Refresh", CallbackData: "cmd:status", Style: "primary"},
+			{Text: "🏠 Menu Utama", CallbackData: "cmd:menu", Style: "primary"},
 		},
 	}
 	return text, rows
