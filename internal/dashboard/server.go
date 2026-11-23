@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"renstra/internal/config"
@@ -56,11 +57,15 @@ type Options struct {
 	ReloadConfig       func(cfg *config.Config)
 }
 
-// Server serves the embedded RENSTRA web dashboard and REST/SSE APIs.
+// Server serves the embedded or hot-synced RENSTRA web dashboard and REST/SSE APIs.
 type Server struct {
-	opts   Options
-	http   *http.Server
-	uiRoot fs.FS
+	opts       Options
+	http       *http.Server
+	embeddedUI fs.FS
+	uiMu       sync.RWMutex
+	uiRoot     fs.FS
+	uiSource   string
+	uiVersion  string
 }
 
 // New creates a configured dashboard Server.
@@ -72,7 +77,8 @@ func New(opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{opts: opts, uiRoot: sub}
+	s := &Server{opts: opts, embeddedUI: sub}
+	s.reloadUIFS()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/overview", s.withAuth(s.handleOverview))
 	mux.HandleFunc("/api/logs", s.withAuth(s.handleLogs))
@@ -99,6 +105,8 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/models/delete", s.withAuth(s.handleModelDelete))
 	mux.HandleFunc("/api/model/default", s.withAuth(s.handleModelDefault))
 	mux.HandleFunc("/api/fallback/reset", s.withAuth(s.handleFallbackReset))
+	mux.HandleFunc("/api/ui/sync", s.withAuth(s.handleUISync))
+	mux.HandleFunc("/api/ui/reset", s.withAuth(s.handleUIReset))
 	mux.Handle("/", s.handleUI())
 
 	s.http = &http.Server{
@@ -197,8 +205,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		skillsCount = len(s.opts.Skills.Names())
 	}
 
+	_, uiSrc, uiVer := s.activeUIFS()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":        s.opts.Version,
+		"api_version":    CurrentAPIVersion,
+		"ui_source":      uiSrc,
+		"ui_version":     uiVer,
 		"uptime_sec":     int64(time.Since(s.opts.StartedAt).Seconds()),
 		"started_at":     s.opts.StartedAt.Format(time.RFC3339),
 		"active_model":   activeModel,

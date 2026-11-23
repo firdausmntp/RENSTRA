@@ -1,9 +1,9 @@
 .layout { display: flex; min-height: 100vh; }
 
 .sidebar {
-  width: 232px;
+  width: 236px;
   flex-shrink: 0;
-  background: #0e1014;
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -16,8 +16,8 @@
 .brand-logo { display: block; flex-shrink: 0; }
 .brand-title { font-weight: 700; font-size: 14px; letter-spacing: 0.06em; }
 .brand-sub { font-size: 11px; color: var(--muted); }
-.drawer-close { display: none; }
-.drawer-backdrop { display: none; }
+.drawer-close, .menu-btn { display: none !important; }
+.drawer-backdrop { display: none !important; }
 
 .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .nav-btn {
@@ -49,7 +49,6 @@
 }
 .topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .topbar h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
-.menu-btn { display: none; }
 .chip {
   background: var(--surface); border: 1px solid var(--border); padding: 3px 9px;
   border-radius: 4px; font-size: 12px; color: var(--muted);
@@ -72,8 +71,7 @@
 
 /* Mobile & small tablet slide-over drawer (<= 820px) */
 @media (max-width: 820px) {
-  .menu-btn { display: inline-flex; }
-  .drawer-close { display: inline-flex; }
+  .menu-btn, .drawer-close { display: inline-flex !important; }
   .sidebar {
     position: fixed; top: 0; left: 0; bottom: 0; width: 264px;
     transform: translateX(-100%);
@@ -83,7 +81,7 @@
   }
   .sidebar.open { transform: translateX(0); }
   .drawer-backdrop {
-    display: block; position: fixed; inset: 0; z-index: 35;
+    display: block !important; position: fixed; inset: 0; z-index: 35;
     background: rgba(6, 7, 9, 0.72);
     opacity: 0; pointer-events: none;
     transition: opacity 200ms var(--ease-out);

@@ -20,7 +20,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.3.0"
+var version = "v1.3.0-beta"
 
 func main() {
 	if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {

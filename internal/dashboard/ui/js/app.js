@@ -12,6 +12,12 @@ function openDrawer(open) {
 $('#btn-menu')?.addEventListener('click', () => openDrawer(true));
 $('#btn-drawer-close')?.addEventListener('click', () => openDrawer(false));
 $('#drawer-backdrop')?.addEventListener('click', () => openDrawer(false));
+window.addEventListener('resize', () => {
+  if (window.innerWidth > 820) openDrawer(false);
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') openDrawer(false);
+});
 
 const ROUTES = ['overview', 'logs', 'skills', 'memory', 'accounts', 'cron'];
 
@@ -126,7 +132,34 @@ $('#btn-log-clear').addEventListener('click', async () => {
   toast('Logs cleared');
 });
 
-$('#skill-search').addEventListener('input', renderSkills);
+function applyTheme(t) {
+  state.theme = t === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', state.theme);
+  localStorage.setItem('renstra_theme', state.theme);
+  if ($('#btn-theme')) $('#btn-theme').textContent = state.theme === 'dark' ? 'Light' : 'Dark';
+}
+applyTheme(state.theme);
+$('#btn-theme')?.addEventListener('click', () => applyTheme(state.theme === 'dark' ? 'light' : 'dark'));
+
+$('#btn-sync-ui')?.addEventListener('click', async () => {
+  toast('Syncing UI from GitHub...');
+  const res = await api('/api/ui/sync', { method: 'POST' });
+  toast(`UI synced (${res.ui_version}). Reloading...`);
+  setTimeout(() => window.location.reload(), 600);
+});
+
+$('#skill-filter-tabs')?.addEventListener('click', (e) => {
+  if (!e.target.dataset.sfilter) return;
+  $$('#skill-filter-tabs .btn').forEach((b) => b.classList.remove('active'));
+  e.target.classList.add('active');
+  state.skillFilter = e.target.dataset.sfilter;
+  state.skillPage = 1;
+  renderSkills();
+});
+$('#btn-sk-prev')?.addEventListener('click', () => { state.skillPage--; renderSkills(); });
+$('#btn-sk-next')?.addEventListener('click', () => { state.skillPage++; renderSkills(); });
+
+$('#skill-search').addEventListener('input', () => { state.skillPage = 1; renderSkills(); });
 $('#btn-skill-new').addEventListener('click', () => openSkillModal(''));
 $('#btn-skill-close').addEventListener('click', closeSkillModal);
 $('#btn-skill-cancel').addEventListener('click', closeSkillModal);
@@ -334,6 +367,21 @@ $('#form-auth').addEventListener('submit', async (e) => {
   }
 });
 
+async function loadChromeMeta() {
+  try {
+    const ov = await api('/api/overview');
+    $('#sb-version').textContent = ov.version || 'v1.3.0-beta';
+    $('#sb-uptime').textContent = 'uptime ' + `${Math.floor((ov.uptime_sec||0)/3600)}h ${Math.floor(((ov.uptime_sec||0)%3600)/60)}m ${(ov.uptime_sec||0)%60}s`;
+    if ($('#sb-ui-src')) {
+      $('#sb-ui-src').textContent = `ui: ${ov.ui_source || 'embedded'}${ov.ui_version ? ' (' + ov.ui_version + ')' : ''}`;
+    }
+    $('#top-model').textContent = 'model: ' + (ov.active_model || '-');
+    $('#btn-logout')?.classList.toggle('hidden', !ov.auth_required);
+    updateErrBadge(ov.error_count || 0);
+  } catch {}
+}
+
 const initSeg = window.location.pathname.replace(/^\/+|\/+$/g, '');
 activateTab(ROUTES.includes(initSeg) ? initSeg : 'overview', false);
+if (state.tab !== 'overview') loadChromeMeta();
 connectSSE();

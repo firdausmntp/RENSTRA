@@ -4,6 +4,20 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.3.0-beta (Hybrid GitHub UI Hot-Sync, Light Theme Default, Logs Beautifier, Skills Pagination, Model/Context & Vision Fix)
+
+- [x] **3-Layer Hybrid UI Loader & GitHub Hot-Sync**
+  - **Lokasi:** [`internal/dashboard/uisync.go`](internal/dashboard/uisync.go), [`internal/dashboard/server.go`](internal/dashboard/server.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`internal/config/config.go`](internal/config/config.go), [`internal/dashboard/ui/manifest.json`](internal/dashboard/ui/manifest.json)
+  - **Fitur:** Urutan resolusi UI (`$RENSTRA_HOME/ui/override` -> `$RENSTRA_HOME/ui/cache` -> embedded fallback) dengan validasi `manifest.json` (`min_api_version`/`max_api_version`), endpoint `POST /api/ui/sync` & `POST /api/ui/reset`, tombol `Sync UI` di dashboard, serta header `Cache-Control: no-cache` untuk aset statis.
+- [x] **Light Theme Default, Logs Beautifier, Skills Pagination & Desktop Drawer Fix**
+  - **Lokasi:** [`internal/dashboard/ui/styles/`](internal/dashboard/ui/styles/tokens.css), [`internal/dashboard/ui/js/`](internal/dashboard/ui/js/views.js), [`internal/dashboard/ui/index.html`](internal/dashboard/ui/index.html)
+  - **Perbaikan:** Tema terang bersih sebagai default (dengan toggle Dark), chip log terstruktur (`duration_ms` human-readable, `tokens_in`/`tokens_out`, sembunyikan `error=""` kosong), paginasi Skills (`12/halaman` + filter `All/Writable/Read-Only`), serta perbaikan tombol menu/drawer agar tersembunyi rapi di desktop dan auto-close saat resize/`Escape`.
+- [x] **Akurasi Daftar Model, Context Window >32k & Auto-Vision Model Kustom**
+  - **Lokasi:** [`internal/config/resolve.go`](internal/config/resolve.go), [`internal/config/config.go`](internal/config/config.go), [`internal/dashboard/api_manage.go`](internal/dashboard/api_manage.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`cmd/renstra/dashboard.go`](cmd/renstra/dashboard.go)
+  - **Perbaikan:** Menaikkan fallback default `DefaultModelConfig` dari `32k` ke `128k` + `Vision: true` (serta `1M` untuk `gemini-3`/`gemini-4` dan `200k` untuk `claude-*`), `ModelConfig.UnmarshalYAML` agar field `vision` yang tidak ditulis di YAML mewarisi `def.Vision`, deduplikasi daftar model + tabel `model_details` di tab Accounts & Models, serta sinkronisasi model global live dari dashboard.
+
+---
+
 ## Rilis v1.3.0 (Web Dashboard Control Plane, Live SSE Logs, Skills Studio & Memory/Account Manager)
 
 - [x] **Web Dashboard Single-Binary (`embed`) dengan Port & Token Konfigurabel**

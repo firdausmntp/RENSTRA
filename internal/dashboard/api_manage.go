@@ -183,19 +183,74 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		accounts := config.ListAccounts(cfg)
 		var models []string
+		type modelItem struct {
+			Ref       string `json:"ref"`
+			Provider  string `json:"provider"`
+			Model     string `json:"model"`
+			Context   int    `json:"context"`
+			MaxOutput int    `json:"max_output"`
+			Vision    bool   `json:"vision"`
+		}
+		var details []modelItem
+		seen := map[string]bool{}
+		addModel := func(pn, mn string, pc config.ProviderConfig) {
+			if mn == "" {
+				return
+			}
+			ref := pn + ":" + mn
+			if seen[ref] {
+				return
+			}
+			seen[ref] = true
+			mc := pc.ModelConfig(mn)
+			models = append(models, ref)
+			details = append(details, modelItem{
+				Ref: ref, Provider: pn, Model: mn,
+				Context: mc.Context, MaxOutput: mc.MaxOutput, Vision: mc.Vision,
+			})
+		}
 		if cfg != nil {
-			for pn, pc := range cfg.Providers {
-				if pc.DefaultModel != "" {
-					models = append(models, pn+":"+pc.DefaultModel)
-				}
+			pnames := make([]string, 0, len(cfg.Providers))
+			for pn := range cfg.Providers {
+				pnames = append(pnames, pn)
+			}
+			sort.Strings(pnames)
+			for _, pn := range pnames {
+				pc := cfg.Providers[pn]
+				addModel(pn, pc.DefaultModel, pc)
+				mnames := make([]string, 0, len(pc.Models))
 				for mn := range pc.Models {
-					models = append(models, pn+":"+mn)
+					mnames = append(mnames, mn)
+				}
+				sort.Strings(mnames)
+				for _, mn := range mnames {
+					addModel(pn, mn, pc)
 				}
 			}
+			anames := make([]string, 0, len(cfg.Aliases))
 			for a := range cfg.Aliases {
-				models = append(models, a)
+				anames = append(anames, a)
 			}
-			sort.Strings(models)
+			sort.Strings(anames)
+			for _, a := range anames {
+				if !seen[a] {
+					seen[a] = true
+					models = append(models, a)
+				}
+			}
+			if cfg.DefaultModel != "" && !seen[cfg.DefaultModel] {
+				if pcfg, mname, rerr := config.Resolve(cfg.DefaultModel, cfg); rerr == nil {
+					mc := pcfg.ModelConfig(mname)
+					seen[cfg.DefaultModel] = true
+					models = append(models, cfg.DefaultModel)
+					details = append(details, modelItem{
+						Ref: cfg.DefaultModel, Provider: pcfg.Kind, Model: mname,
+						Context: mc.Context, MaxOutput: mc.MaxOutput, Vision: mc.Vision,
+					})
+				} else {
+					models = append(models, cfg.DefaultModel)
+				}
+			}
 		}
 		defModel := ""
 		if cfg != nil {
@@ -205,6 +260,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			"accounts":      accounts,
 			"default_model": defModel,
 			"models":        models,
+			"model_details": details,
 		})
 		return
 	}
@@ -248,119 +304,6 @@ func (s *Server) handleAccountDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	updated, err := config.RemoveAccount(req.Name, s.opts.Config)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.opts.Config = updated
-	if s.opts.ReloadConfig != nil {
-		s.opts.ReloadConfig(updated)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func (s *Server) handleModelDefault(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	var req struct {
-		Ref string `json:"ref"`
-	}
-	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Ref) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref model wajib diisi"})
-		return
-	}
-	if s.opts.SetDefaultModelRun != nil {
-		if err := s.opts.SetDefaultModelRun(req.Ref); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-			return
-		}
-	}
-	if fresh, err := config.Load(); err == nil {
-		s.opts.Config = fresh
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func (s *Server) handleFallbackReset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	if s.opts.ResetFallbacks != nil {
-		s.opts.ResetFallbacks()
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
-func (s *Server) handleModelAdd(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	var req struct {
-		Model    string `json:"model"`
-		Provider string `json:"provider"`
-		Context  string `json:"context"`
-		Vision   bool   `json:"vision"`
-		Alias    string `json:"alias"`
-	}
-	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Model) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nama model wajib diisi"})
-		return
-	}
-	args := []string{strings.TrimSpace(req.Model)}
-	if strings.TrimSpace(req.Provider) != "" {
-		args = append(args, strings.TrimSpace(req.Provider))
-	}
-	if strings.TrimSpace(req.Context) != "" {
-		args = append(args, strings.TrimSpace(req.Context))
-	}
-	if req.Vision {
-		args = append(args, "vision")
-	}
-	if strings.TrimSpace(req.Alias) != "" {
-		args = append(args, "alias="+strings.TrimSpace(req.Alias))
-	}
-	cfg := s.opts.Config
-	if cfg == nil {
-		cfg, _ = config.Load()
-	}
-	spec, err := config.ParseAddModelArgs(args, cfg)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	updated, err := config.AddModel(spec, cfg)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.opts.Config = updated
-	if s.opts.ReloadConfig != nil {
-		s.opts.ReloadConfig(updated)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ref": spec.Provider + ":" + spec.Model})
-}
-
-func (s *Server) handleModelDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
-		return
-	}
-	var req struct {
-		Ref string `json:"ref"`
-	}
-	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Ref) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref model wajib diisi"})
-		return
-	}
-	cfg := s.opts.Config
-	if cfg == nil {
-		cfg, _ = config.Load()
-	}
-	updated, _, err := config.RemoveModel(req.Ref, cfg)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

@@ -184,9 +184,14 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.3.0)
+## 7. Status Rilis & Pengembangan (v1.3.0-beta)
 
-Fitur & pembaruan v1.3.0:
+Fitur & pembaruan v1.3.0-beta:
+1. **3-Layer Hybrid UI Loader & GitHub Hot-Sync (`internal/dashboard/uisync.go`):** Resolusi UI berlapis (`override` -> `cache` -> `embed`) dengan pengecekan kompatibilitas `manifest.json` (`min_api_version`/`max_api_version`), tombol `Sync UI` (`POST /api/ui/sync` & `POST /api/ui/reset`), dan `Cache-Control: no-cache`.
+2. **Light Theme Default, Logs Beautifier, Skills Pagination & Desktop Drawer Fix:** Tema putih bersih sebagai default + toggle Dark, chip log terstruktur tanpa `error=""` kosong, paginasi Skills `12/halaman` + filter status, serta penyembunyian tombol hamburger/drawer di desktop.
+3. **Akurasi Model, Context Window >32k & Vision Model Kustom:** Fallback `DefaultModelConfig` dinaikkan ke `128k` + `Vision: true` (`1M` untuk `gemini-3/4`, `200k` untuk `claude-*`), pewarisan `vision` saat tidak ditulis di `config.yaml` (`ModelConfig.UnmarshalYAML`), deduplikasi + `model_details` di tab Accounts & Models, serta sinkronisasi live global model dari dashboard.
+
+Fitur v1.3.0 sebelumnya:
 1. **Web Dashboard Control Plane & Live Log Hub (`internal/dashboard`):** Dashboard web single-binary (`embed`) dengan port & bearer token konfigurabel (`dashboard.*` / `--dashboard-port` / `renstra dashboard`), SPA routes (`/overview`, `/logs`, `/skills`, `/memory`, `/accounts`, `/cron`), full CRUD (Skills Studio, `SOUL.md`/`MEMORY.md`/`USER.md`, Multi-Akun & Model, Cron, Turns, Transkrip Sesi), Live SSE Logs + Download `.jsonl`, serta desain modular responsif Desktop/Tablet/Mobile.
 2. **`/model <id> --global`:** Mengubah `default_model` sekaligus menyelaraskan seluruh sesi chat/grup/topik aktif di memori dan SQLite (`SetGlobalModel`).
 3. **Antrean Pesan Coalesced Saat Thinking (Hermes-Style):** Pesan baru yang masuk saat bot sedang berpikir/menjalankan tool di Telegram otomatis diantrekan dan digabung (`enqueueOrAcquire`) tanpa membatalkan tugas berjalan; `/stop` tetap membatalkan secara instan.

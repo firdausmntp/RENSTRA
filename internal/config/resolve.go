@@ -140,16 +140,15 @@ func DefaultModelConfig(model string) ModelConfig {
 	switch {
 	case strings.HasPrefix(m, "gemini-1.5"),
 		strings.HasPrefix(m, "gemini-2"),
+		strings.HasPrefix(m, "gemini-3"),
+		strings.HasPrefix(m, "gemini-4"),
 		strings.HasPrefix(m, "gemini-exp"),
 		strings.HasPrefix(m, "gpt-4.1"),
 		strings.HasPrefix(m, "gpt-5"):
 		return ModelConfig{Context: 1000000, MaxOutput: 8192, Vision: true}
-	case strings.HasPrefix(m, "claude-3"),
-		strings.HasPrefix(m, "claude-sonnet"),
-		strings.HasPrefix(m, "claude-opus"),
-		strings.HasPrefix(m, "claude-haiku"),
-		strings.HasPrefix(m, "claude-4"),
-		strings.HasPrefix(m, "o1"),
+	case strings.HasPrefix(m, "claude-"):
+		return ModelConfig{Context: 200000, MaxOutput: 8192, Vision: true}
+	case strings.HasPrefix(m, "o1"),
 		strings.HasPrefix(m, "o3"),
 		strings.HasPrefix(m, "o4"):
 		return ModelConfig{Context: 200000, MaxOutput: 8192, Vision: true}
@@ -173,6 +172,6 @@ func DefaultModelConfig(model string) ModelConfig {
 		strings.HasPrefix(m, "codestral"):
 		return ModelConfig{Context: 128000, MaxOutput: 4096}
 	default:
-		return ModelConfig{Context: 32000}
+		return ModelConfig{Context: 128000, MaxOutput: 4096, Vision: true}
 	}
 }

@@ -134,7 +134,10 @@ func startDashboardServer(ctx context.Context, cfg *config.Config, flags serveFl
 			handler.invalidateAllPrompts()
 		},
 		SetDefaultModelRun: func(ref string) error {
-			return modelSetCmd(ref)
+			if _, err := handler.switchGlobalModel(context.Background(), ref); err != nil {
+				return err
+			}
+			return nil
 		},
 		ReloadConfig: func(updated *config.Config) {
 			handler.cfg = updated
@@ -220,11 +223,26 @@ func dashboardCmd(args []string) error {
 		Config:           cfg,
 		LogHub:           logHub,
 		StartedAt:        time.Now(),
-		GetActiveModel:   func() string { return cfg.DefaultModel },
-		GetProviderKind:  func() string { return "standalone" },
-		GetContextWindow: func() int { return 128000 },
+		GetActiveModel:  func() string { return cfg.DefaultModel },
+		GetProviderKind: func() string { return "standalone" },
+		GetContextWindow: func() int {
+			if pcfg, m, err := config.Resolve(cfg.DefaultModel, cfg); err == nil {
+				return pcfg.ModelConfig(m).Context
+			}
+			return 128000
+		},
 		SetDefaultModelRun: func(ref string) error {
-			return modelSetCmd(ref)
+			_, storedRef, err := config.SetDefaultModel(ref)
+			if err != nil {
+				return err
+			}
+			if st != nil {
+				_ = st.SetGlobalModel(context.Background(), storedRef)
+			}
+			if fresh, err := config.Load(); err == nil {
+				cfg = fresh
+			}
+			return nil
 		},
 	})
 	if err != nil {

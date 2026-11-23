@@ -5,6 +5,10 @@ export const state = {
   paused: false,
   logs: [],
   skills: [],
+  skillFilter: 'all',
+  skillPage: 1,
+  skillPageSize: 12,
+  theme: localStorage.getItem('renstra_theme') || 'light',
   token: localStorage.getItem('renstra_dash_token') || ''
 };
 

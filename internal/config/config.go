@@ -55,10 +55,13 @@ type TelegramConfig struct {
 }
 
 type DashboardConfig struct {
-	Enabled *bool  `yaml:"enabled"`
-	Addr    string `yaml:"addr"`
-	Port    int    `yaml:"port"`
-	Token   string `yaml:"token"`
+	Enabled    *bool  `yaml:"enabled"`
+	Addr       string `yaml:"addr"`
+	Port       int    `yaml:"port"`
+	Token      string `yaml:"token"`
+	UIRepo     string `yaml:"ui_repo"`
+	UIBranch   string `yaml:"ui_branch"`
+	AutoSyncUI *bool  `yaml:"auto_sync_ui"`
 }
 
 type ToolsConfig struct {
@@ -89,12 +92,33 @@ type Agent struct {
 }
 
 type ModelConfig struct {
-	Context   int     `yaml:"context"`
-	MaxOutput int     `yaml:"max_output"`
-	Tools     *bool   `yaml:"tools"`
-	Vision    bool    `yaml:"vision"`
-	PriceIn   float64 `yaml:"price_in"`
-	PriceOut  float64 `yaml:"price_out"`
+	Context        int     `yaml:"context"`
+	MaxOutput      int     `yaml:"max_output"`
+	Tools          *bool   `yaml:"tools"`
+	Vision         bool    `yaml:"vision"`
+	PriceIn        float64 `yaml:"price_in"`
+	PriceOut       float64 `yaml:"price_out"`
+	visionExplicit bool
+}
+
+// UnmarshalYAML tracks whether `vision` was explicitly set so omitted entries
+// can inherit DefaultModelConfig.Vision while explicit `vision: false` is respected.
+func (m *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
+	type rawModelConfig ModelConfig
+	var raw rawModelConfig
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	if value.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(value.Content); i += 2 {
+			if value.Content[i].Value == "vision" {
+				raw.visionExplicit = true
+				break
+			}
+		}
+	}
+	*m = ModelConfig(raw)
+	return nil
 }
 
 type ProviderConfig struct {
@@ -345,6 +369,9 @@ func (p ProviderConfig) ModelConfig(model string) ModelConfig {
 	}
 	if m.MaxOutput == 0 {
 		m.MaxOutput = def.MaxOutput
+	}
+	if !m.visionExplicit && !m.Vision {
+		m.Vision = def.Vision
 	}
 	return m
 }

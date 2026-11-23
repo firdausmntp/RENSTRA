@@ -199,3 +199,32 @@ providers:
 	}
 }
 
+func TestModelVisionInheritance(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", dir)
+	raw := `default_model: proxy:v4
+providers:
+  proxy:
+    kind: openai
+    models:
+      v4:
+        context: 128000
+      textonly:
+        context: 128000
+        vision: false
+`
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Providers["proxy"].ModelConfig("v4").Vision {
+		t.Fatal("expected omitted vision field on custom model v4 to inherit Vision=true")
+	}
+	if cfg.Providers["proxy"].ModelConfig("textonly").Vision {
+		t.Fatal("expected explicit vision: false to stay false")
+	}
+}
+

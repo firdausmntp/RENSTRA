@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,4 +132,29 @@ func TestDashboardServerEndpointsAndAuth(t *testing.T) {
 		t.Fatalf("cron save failed: %d %s", rec.Code, rec.Body.String())
 	}
 	_ = context.Background()
+}
+
+func TestResolveUIFSLocalAndCacheOverride(t *testing.T) {
+	home := t.TempDir()
+	cacheDir := filepath.Join(home, "dashboard-cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(cacheDir, "index.html"), []byte("<html>synced</html>"), 0o644)
+	_ = os.WriteFile(filepath.Join(cacheDir, "manifest.json"), []byte(`{"ui_version":"1.3.0-beta"}`), 0o644)
+
+	_, src, ver := ResolveUIFS(home, uiFS)
+	if src != "synced" || ver != "1.3.0-beta" {
+		t.Fatalf("expected synced 1.3.0-beta, got src=%q ver=%q", src, ver)
+	}
+
+	localDir := filepath.Join(home, "dashboard-ui")
+	if err := os.MkdirAll(localDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(localDir, "index.html"), []byte("<html>local</html>"), 0o644)
+	_, src2, _ := ResolveUIFS(home, uiFS)
+	if src2 != "local" {
+		t.Fatalf("expected local override, got %q", src2)
+	}
 }

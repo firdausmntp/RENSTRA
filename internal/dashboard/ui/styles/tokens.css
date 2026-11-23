@@ -1,17 +1,48 @@
 :root {
+  --bg: #f8fafc;
+  --sidebar-bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --log-bg: #ffffff;
+  --log-row-border: #f1f5f9;
+  --input-bg: #ffffff;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text: #0f172a;
+  --muted: #475569;
+  --accent: #0369a1;
+  --btn-prim-bg: #0f172a;
+  --btn-prim-fg: #ffffff;
+  --btn-prim-hover: #1e293b;
+  --green: #15803d;
+  --amber: #b45309;
+  --red: #b91c1c;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-elev: 0 12px 32px -6px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+[data-theme="dark"] {
   --bg: #0b0c0e;
+  --sidebar-bg: #0e1014;
   --surface: #121418;
   --surface-2: #181b21;
+  --log-bg: #07080a;
+  --log-row-border: #171a20;
+  --input-bg: #090a0c;
   --border: #252932;
   --border-strong: #343a46;
   --text: #e6e8ec;
   --muted: #8b92a1;
   --accent: #38bdf8;
+  --btn-prim-bg: #e6e8ec;
+  --btn-prim-fg: #0b0c0e;
+  --btn-prim-hover: #ffffff;
   --green: #22c55e;
   --amber: #eab308;
   --red: #ef4444;
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --shadow-card: none;
   --shadow-elev: 0 8px 24px -4px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 

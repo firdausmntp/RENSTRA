@@ -2,8 +2,11 @@ import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js';
 
 export async function loadOverview() {
   const [ov, turnsData] = await Promise.all([api('/api/overview'), api('/api/turns?limit=10')]);
-  $('#sb-version').textContent = ov.version || 'v1.3.0';
+  $('#sb-version').textContent = ov.version || 'v1.3.0-beta';
   $('#sb-uptime').textContent = 'uptime ' + fmtDur(ov.uptime_sec || 0);
+  if ($('#sb-ui-src')) {
+    $('#sb-ui-src').textContent = `ui: ${ov.ui_source || 'embedded'}${ov.ui_version ? ' (' + ov.ui_version + ')' : ''}`;
+  }
   $('#top-model').textContent = 'model: ' + (ov.active_model || '-');
   $('#ov-model').textContent = ov.active_model || '-';
   $('#ov-provider').textContent = `${ov.provider || '-'} • ctx ${fmtTok(ov.context_window)}`;
@@ -57,6 +60,39 @@ export async function loadLogs() {
   renderLogs();
 }
 
+function shortTime(iso) {
+  if (!iso) return '-';
+  const idx = iso.indexOf('T');
+  if (idx >= 0) return iso.slice(idx + 1, idx + 9);
+  return iso;
+}
+
+function formatLogChips(attrs) {
+  if (!attrs) return '';
+  const chips = [];
+  const skip = new Set(['tokens_in', 'tokens_out']);
+  if (attrs.tokens_in !== undefined || attrs.tokens_out !== undefined) {
+    chips.push(`<span class="attr-chip">${fmtTok(attrs.tokens_in || 0)} in · ${fmtTok(attrs.tokens_out || 0)} out</span>`);
+  }
+  for (const [k, v] of Object.entries(attrs)) {
+    if (skip.has(k) || v === '' || v === null || v === undefined) continue;
+    if (k === 'duration_ms') {
+      const sec = (Number(v) / 1000).toFixed(1);
+      chips.push(`<span class="attr-chip">${sec}s</span>`);
+      continue;
+    }
+    if (k === 'status') {
+      const cls = v === 'done' ? 'badge-ok' : v === 'error' ? 'badge-err' : 'badge-warn';
+      chips.push(`<span class="badge ${cls}">${esc(v)}</span>`);
+      continue;
+    }
+    const val = typeof v === 'string' ? v : JSON.stringify(v);
+    const isErr = k === 'error' || k === 'err';
+    chips.push(`<span class="attr-chip ${isErr ? 'is-err' : ''}">${esc(k)}: ${esc(val)}</span>`);
+  }
+  return chips.length ? `<div class="log-attrs">${chips.join('')}</div>` : '';
+}
+
 export function renderLogs() {
   const box = $('#log-list');
   const rows = state.logs.filter((e) => {
@@ -64,24 +100,42 @@ export function renderLogs() {
     if (state.search && !JSON.stringify(e).toLowerCase().includes(state.search.toLowerCase())) return false;
     return true;
   });
+  if ($('#log-count')) $('#log-count').textContent = `${rows.length} entries`;
   box.innerHTML = !rows.length
-    ? '<div class="muted" style="padding:12px;">No matching log entries.</div>'
+    ? '<div class="muted" style="padding:14px;">No matching log entries.</div>'
     : rows.map((e) => {
         const cls = e.level === 'ERROR' ? 'badge-err' : e.level === 'WARN' ? 'badge-warn' : 'badge-info';
-        const attrs = e.attrs ? `<div class="log-attrs">${esc(JSON.stringify(e.attrs))}</div>` : '';
-        return `<div class="log-row"><span class="muted log-time">${esc(e.time)}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
+        const attrs = formatLogChips(e.attrs);
+        return `<div class="log-row"><span class="muted log-time" title="${esc(e.time)}">${esc(shortTime(e.time))}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
       }).join('');
 }
 
 export async function loadSkills() {
   const data = await api('/api/skills');
   state.skills = data.skills || [];
+  state.skillPage = 1;
   renderSkills();
 }
 
 export function renderSkills() {
   const q = ($('#skill-search').value || '').toLowerCase();
-  const list = state.skills.filter((s) => s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
+  const filtered = state.skills.filter((s) => {
+    if (state.skillFilter === 'writable' && !s.writable) return false;
+    if (state.skillFilter === 'readonly' && s.writable) return false;
+    return s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q);
+  });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / state.skillPageSize));
+  if (state.skillPage > totalPages) state.skillPage = totalPages;
+  if (state.skillPage < 1) state.skillPage = 1;
+  const start = (state.skillPage - 1) * state.skillPageSize;
+  const list = filtered.slice(start, start + state.skillPageSize);
+
+  if ($('#skills-page-info')) {
+    $('#skills-page-info').textContent = `Page ${state.skillPage} / ${totalPages} (${filtered.length} skills)`;
+  }
+  if ($('#btn-sk-prev')) $('#btn-sk-prev').disabled = state.skillPage <= 1;
+  if ($('#btn-sk-next')) $('#btn-sk-next').disabled = state.skillPage >= totalPages;
+
   $('#skills-grid').innerHTML = !list.length
     ? '<div class="muted">No skills found.</div>'
     : list.map((s) => `
@@ -123,7 +177,15 @@ export async function loadAccounts() {
         <button class="btn btn-sm btn-danger" data-del-account="${esc(a.Name)}">Delete</button>
       </div>`).join('');
   const sel = $('#sel-default-model');
-  sel.innerHTML = (d.models || []).map((m) => `<option value="${esc(m)}" ${m === d.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  const models = d.models || [];
+  sel.innerHTML = models.map((m) => `<option value="${esc(m)}" ${m === d.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  const detailsBox = $('#models-detail-list');
+  if (detailsBox) {
+    const details = d.model_details || [];
+    detailsBox.innerHTML = !details.length
+      ? '<div class="muted">No models configured.</div>'
+      : details.map((m) => `<div class="list-item"><div><div class="mono"><strong>${esc(m.ref)}</strong></div><div class="muted mono">ctx ${fmtTok(m.context)} · max_out ${fmtTok(m.max_output || 4096)}${m.vision ? ' · vision' : ''}</div></div></div>`).join('');
+  }
 }
 
 export async function loadCronAndSessions() {

@@ -7,16 +7,33 @@ import (
 	"strings"
 	"time"
 
+	"renstra/internal/config"
 	"renstra/internal/cron"
 	"renstra/internal/store"
 )
 
+func (s *Server) reloadUIFS() {
+	root, src, ver := ResolveUIFS(s.opts.HomeDir, s.embeddedUI)
+	s.uiMu.Lock()
+	s.uiRoot = root
+	s.uiSource = src
+	s.uiVersion = ver
+	s.uiMu.Unlock()
+}
+
+func (s *Server) activeUIFS() (fs.FS, string, string) {
+	s.uiMu.RLock()
+	defer s.uiMu.RUnlock()
+	return s.uiRoot, s.uiSource, s.uiVersion
+}
+
 func (s *Server) handleUI() http.Handler {
-	fileSrv := http.FileServer(http.FS(s.uiRoot))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		root, _, _ := s.activeUIFS()
+		w.Header().Set("Cache-Control", "no-cache")
 		clean := strings.TrimPrefix(r.URL.Path, "/")
 		if clean == "" || !strings.Contains(clean, ".") {
-			raw, err := fs.ReadFile(s.uiRoot, "index.html")
+			raw, err := fs.ReadFile(root, "index.html")
 			if err != nil {
 				http.NotFound(w, r)
 				return
@@ -25,8 +42,40 @@ func (s *Server) handleUI() http.Handler {
 			_, _ = w.Write(raw)
 			return
 		}
-		fileSrv.ServeHTTP(w, r)
+		http.FileServer(http.FS(root)).ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) handleUISync(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	repo, branch := "", ""
+	if s.opts.Config != nil {
+		repo = s.opts.Config.Dashboard.UIRepo
+		branch = s.opts.Config.Dashboard.UIBranch
+	}
+	manifest, err := SyncUI(r.Context(), s.opts.HomeDir, repo, branch)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.reloadUIFS()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ui_version": manifest.UIVersion, "source": "synced"})
+}
+
+func (s *Server) handleUIReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	if err := ResetSyncedUI(s.opts.HomeDir); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	s.reloadUIFS()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "source": "embedded"})
 }
 
 func (s *Server) handleTurns(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +259,119 @@ func (s *Server) handleCronDelete(w http.ResponseWriter, r *http.Request) {
 	if err := s.opts.Store.RemoveJob(r.Context(), req.ID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleModelDefault(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Ref string `json:"ref"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Ref) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref model wajib diisi"})
+		return
+	}
+	if s.opts.SetDefaultModelRun != nil {
+		if err := s.opts.SetDefaultModelRun(req.Ref); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	if fresh, err := config.Load(); err == nil {
+		s.opts.Config = fresh
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleFallbackReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	if s.opts.ResetFallbacks != nil {
+		s.opts.ResetFallbacks()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleModelAdd(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Model    string `json:"model"`
+		Provider string `json:"provider"`
+		Context  string `json:"context"`
+		Vision   bool   `json:"vision"`
+		Alias    string `json:"alias"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Model) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nama model wajib diisi"})
+		return
+	}
+	args := []string{strings.TrimSpace(req.Model)}
+	if strings.TrimSpace(req.Provider) != "" {
+		args = append(args, strings.TrimSpace(req.Provider))
+	}
+	if strings.TrimSpace(req.Context) != "" {
+		args = append(args, strings.TrimSpace(req.Context))
+	}
+	if req.Vision {
+		args = append(args, "vision")
+	}
+	if strings.TrimSpace(req.Alias) != "" {
+		args = append(args, "alias="+strings.TrimSpace(req.Alias))
+	}
+	cfg := s.opts.Config
+	if cfg == nil {
+		cfg, _ = config.Load()
+	}
+	spec, err := config.ParseAddModelArgs(args, cfg)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	updated, err := config.AddModel(spec, cfg)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.opts.Config = updated
+	if s.opts.ReloadConfig != nil {
+		s.opts.ReloadConfig(updated)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ref": spec.Provider + ":" + spec.Model})
+}
+
+func (s *Server) handleModelDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Ref string `json:"ref"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Ref) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ref model wajib diisi"})
+		return
+	}
+	cfg := s.opts.Config
+	if cfg == nil {
+		cfg, _ = config.Load()
+	}
+	updated, _, err := config.RemoveModel(req.Ref, cfg)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.opts.Config = updated
+	if s.opts.ReloadConfig != nil {
+		s.opts.ReloadConfig(updated)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
