@@ -81,9 +81,12 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 	case "/version":
 		ver := opts.Version
 		if ver == "" {
-			ver = "v1.2.6"
+			ver = "v1.2.7"
 		}
 		fmt.Fprintf(out, "%s⚡ renstra%s %s%s%s\n", cCyan, cReset, cGreen, ver, cReset)
+		if opts.UpdateInfo != "" {
+			fmt.Fprintf(out, "%s💡 %s%s\n", cYellow, opts.UpdateInfo, cReset)
+		}
 		return true
 	case "/usage":
 		today := time.Now().Format("2006-01-02")
@@ -131,6 +134,9 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 		return true
 	case "/status":
 		printStatus(ctx, r, chatID, out, opts)
+		return true
+	case "/context":
+		handleContextCLI(ctx, r, chatID, arg, out)
 		return true
 	case "/cron":
 		handleCronCLI(ctx, r, chatID, arg, out)
@@ -181,6 +187,10 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 			fmt.Fprintln(out, "Memory store tidak aktif.")
 			return true
 		}
+		if arg != "" {
+			handleMemorySubCLI(r, arg, out)
+			return true
+		}
 		snap := r.Memory.Snapshot()
 		memLim, userLim := r.Memory.Limits()
 		memBody := strings.TrimSpace(snap.Memory)
@@ -196,17 +206,21 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 			cCyan, utf8.RuneCountInString(snap.User), userLim, cReset, userBody)
 		return true
 	case "/remember":
-		handleRememberCLI(r, arg, out)
-		return true
+		handleRememberCLI(r, arg, out); return true
+	case "/soul":
+		handleSoulCLI(r, arg, out); return true
+	case "/persona":
+		handlePersonaCLI(r, arg, out); return true
+	case "/undo":
+		handleUndoCLI(out); return true
+	case "/account", "/accounts", "/provider":
+		handleAccountCLI(arg, out, opts); return true
 	case "/export":
-		handleExportCLI(ctx, r, chatID, arg, out)
-		return true
+		handleExportCLI(ctx, r, chatID, arg, out); return true
 	case "/fallback":
-		handleFallbackCLI(r, arg, out)
-		return true
+		handleFallbackCLI(r, arg, out); return true
 	case "/logs":
-		handleLogsCLI(r, arg, out)
-		return true
+		handleLogsCLI(r, arg, out); return true
 	case "/model":
 		if arg == "" {
 			fmt.Fprintf(out, "%sModel aktif:%s %s%s%s\n", cDim, cReset, cGreen, r.GetModel(), cReset)
@@ -269,6 +283,9 @@ func printStatus(ctx context.Context, r *agent.Runner, chatID int64, out io.Writ
 	fmt.Fprintf(out, "  Biaya    : $%.4f hari ini\n", u.CostUSD)
 	if r.Cwd != "" {
 		fmt.Fprintf(out, "  Workspace: %s%s%s\n", cDim, r.Cwd, cReset)
+	}
+	if opts != nil && opts.UpdateInfo != "" {
+		fmt.Fprintf(out, "  %s💡 %s%s\n", cYellow, opts.UpdateInfo, cReset)
 	}
 }
 

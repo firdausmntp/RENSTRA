@@ -29,6 +29,9 @@ func New(cfg config.ProviderConfig, apiKey string) (*Client, error) {
 		timeout = 120 * time.Second
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 32
+	transport.MaxIdleConnsPerHost = 16
+	transport.IdleConnTimeout = 90 * time.Second
 	if cfg.Proxy != "" {
 		u, err := url.Parse(cfg.Proxy)
 		if err != nil || u.Host == "" {

@@ -10,7 +10,7 @@ import (
 
 func TestBuildPromptContainsRulesAndTools(t *testing.T) {
 	p := agent.BuildPrompt(agent.BuildParams{Cwd: "/tmp/ws", Model: "m", Tools: []provider.ToolDef{{Name: "terminal"}}})
-	for _, want := range []string{"terminal", "/tmp/ws", "[untrusted]", "renstra"} {
+	for _, want := range []string{"terminal", "/tmp/ws", "[untrusted]", "renstra", "Zero Refusal", "DILARANG MENOLAK"} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt tidak memuat %q", want)
 		}

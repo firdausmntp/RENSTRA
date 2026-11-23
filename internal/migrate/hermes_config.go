@@ -97,17 +97,31 @@ func migrateConfigAndMCP(src string, dotEnv map[string]string, opts Options, rep
 			}
 
 			allowed := collectTelegramUsers(hc, dotEnv)
+			providersMap := map[string]any{
+				provName: map[string]any{
+					"kind":          kind,
+					"base_url":      baseURL,
+					"api_key_env":   apiKeyEnv,
+					"default_model": modelName,
+				},
+			}
+			// Auto-migrate all other provider accounts present in Hermes .env
+			for _, extraKind := range []string{"openai", "anthropic", "openrouter", "groq", "google", "mistral", "xai"} {
+				k, bURL, envK := mapHermesProvider(extraKind, "")
+				if envK != "" && strings.TrimSpace(dotEnv[envK]) != "" && providersMap[k] == nil {
+					providersMap[k] = map[string]any{
+						"kind":          k,
+						"base_url":      bURL,
+						"api_key_env":   envK,
+						"default_model": defaultModelForKind(k),
+					}
+				}
+			}
 
 			doc := map[string]any{
-				"default_model": provName + ":" + modelName,
-				"providers": map[string]any{
-					provName: map[string]any{
-						"kind":          kind,
-						"base_url":      baseURL,
-						"api_key_env":   apiKeyEnv,
-						"default_model": modelName,
-					},
-				},
+				"default_model":  provName + ":" + modelName,
+				"smart_fallback": len(providersMap) > 1,
+				"providers":      providersMap,
 				"aliases": map[string]any{},
 				"approval": map[string]any{
 					"mode":    "prompt",

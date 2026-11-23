@@ -75,7 +75,64 @@ func backupExistingFile(backupDir, cwd, path string) {
 		}
 	}
 	name := fmt.Sprintf("%s.%s.bak", sanitize(label), time.Now().UTC().Format("20060102T150405.000000000"))
-	_ = os.WriteFile(filepath.Join(backupDir, name), data, 0o600)
+	bakPath := filepath.Join(backupDir, name)
+	_ = os.WriteFile(bakPath, data, 0o600)
+	_ = os.WriteFile(bakPath+".path", []byte(path), 0o600)
+}
+
+// RestoreLastCheckpoint restores the most recent file backup in backupDir and
+// removes that checkpoint entry so repeated /undo walks back step by step.
+func RestoreLastCheckpoint(backupDir string) (string, error) {
+	if strings.TrimSpace(backupDir) == "" {
+		return "", errors.New("direktori checkpoint tidak dikonfigurasi")
+	}
+	entries, err := os.ReadDir(backupDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", errors.New("belum ada checkpoint file untuk di-undo")
+		}
+		return "", err
+	}
+	var latestBak string
+	var latestMod time.Time
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".bak") {
+			continue
+		}
+		full := filepath.Join(backupDir, e.Name())
+		if _, err := os.Stat(full + ".path"); err != nil {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if latestBak == "" || info.ModTime().After(latestMod) || (info.ModTime().Equal(latestMod) && full > latestBak) {
+			latestBak = full
+			latestMod = info.ModTime()
+		}
+	}
+	if latestBak == "" {
+		return "", errors.New("belum ada checkpoint file yang dapat di-undo")
+	}
+	origBytes, err := os.ReadFile(latestBak + ".path")
+	if err != nil {
+		return "", err
+	}
+	origPath := strings.TrimSpace(string(origBytes))
+	data, err := os.ReadFile(latestBak)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(origPath), 0o755); err != nil {
+		return "", err
+	}
+	if err := atomicWrite(origPath, data); err != nil {
+		return "", err
+	}
+	_ = os.Remove(latestBak)
+	_ = os.Remove(latestBak + ".path")
+	return origPath, nil
 }
 
 // resolve makes relative paths resolve against the tool's cwd, matching the

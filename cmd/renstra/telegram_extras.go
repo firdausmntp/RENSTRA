@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"renstra/internal/config"
 	"renstra/internal/memory"
 	"renstra/internal/telegram"
+	"renstra/internal/tool"
 )
 
 func (h *telegramHandler) buildMemoryMenu() (string, [][]telegram.InlineButton) {
@@ -27,7 +30,9 @@ func (h *telegramHandler) buildMemoryMenu() (string, [][]telegram.InlineButton) 
 	if userText == "" {
 		userText = "(kosong)"
 	}
-	text := fmt.Sprintf("🧠 **MEMORY (%d/%d char):**\n%s\n\n👤 **USER PROFILE (%d/%d char):**\n%s\n\n💡 _Tips: Reply pesan mana saja dengan `/remember` atau ketik `/remember <catatan>` untuk menyimpan._",
+	soulLen := utf8.RuneCountInString(snap.Soul)
+	text := fmt.Sprintf("🔥 **SOUL.md (%d/%d char):** `Zero Refusal Aktif` (ketik `/soul` untuk lihat/ubah)\n\n🧠 **MEMORY (%d/%d char):**\n%s\n\n👤 **USER PROFILE (%d/%d char):**\n%s\n\n💡 _Tips: Reply pesan mana saja dengan `/remember` atau ketik `/remember <catatan>` untuk menyimpan._",
+		soulLen, memory.SoulLimit,
 		utf8.RuneCountInString(snap.Memory), memLim, memText,
 		utf8.RuneCountInString(snap.User), userLim, userText)
 
@@ -35,6 +40,7 @@ func (h *telegramHandler) buildMemoryMenu() (string, [][]telegram.InlineButton) 
 		{
 			{Text: "🗑️ Clear Memory", CallbackData: "mem:clr:memory", Style: "danger"},
 			{Text: "🗑️ Clear User", CallbackData: "mem:clr:user", Style: "danger"},
+			{Text: "🔥 Reset Soul", CallbackData: "mem:clr:soul", Style: "primary"},
 		},
 		{
 			{Text: "🔄 Refresh", CallbackData: "cmd:memory", Style: "primary"},
@@ -57,6 +63,9 @@ func (h *telegramHandler) handleMemoryCallback(ctx context.Context, chatID, msgI
 		case "user":
 			_ = h.runner.Memory.Write(memory.KindUser, "")
 			h.invalidateAllPrompts()
+		case "soul":
+			_ = h.runner.Memory.ResetSoul()
+			h.invalidateAllPrompts()
 		}
 	}
 	if h.bot != nil {
@@ -65,21 +74,73 @@ func (h *telegramHandler) handleMemoryCallback(ctx context.Context, chatID, msgI
 	}
 }
 
-func (h *telegramHandler) handleRememberCmd(arg string) (string, error) {
+func (h *telegramHandler) handleSoulCmd(arg string) (string, error) {
+	if h.runner.Memory == nil {
+		return memory.DefaultSoul, nil
+	}
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		snap := h.runner.Memory.Snapshot()
+		return fmt.Sprintf("🔥 **SOUL.md (%d/%d char):**\n\n%s\n\n💡 _Ketik `/soul reset` untuk kembali ke Zero Refusal bawaan, atau `/soul <isi baru>` untuk mengubah._",
+			utf8.RuneCountInString(snap.Soul), memory.SoulLimit, strings.TrimSpace(snap.Soul)), nil
+	}
+	if strings.EqualFold(trimmed, "reset") || strings.EqualFold(trimmed, "default") {
+		if err := h.runner.Memory.ResetSoul(); err != nil {
+			return "", err
+		}
+		h.invalidateAllPrompts()
+		return "🔥 `SOUL.md` dikembalikan ke default **Zero Refusal & Action-First**.", nil
+	}
+	if err := h.runner.Memory.Write(memory.KindSoul, trimmed); err != nil {
+		return "", err
+	}
+	h.invalidateAllPrompts()
+	return fmt.Sprintf("🔥 `SOUL.md` berhasil diperbarui (%d/%d char).", utf8.RuneCountInString(trimmed), memory.SoulLimit), nil
+}
+
+func (h *telegramHandler) handleRememberCmd(ctx context.Context, chatID int64, arg string) (string, error) {
+	note := strings.TrimSpace(arg)
+	if note == "" {
+		return "Pemakaian: `/remember <catatan>` (atau reply pesan dengan `/remember`).\nAwalan: `user:` untuk USER.md, `soul:` untuk SOUL.md, `here:` untuk memori khusus topik/grup ini.", nil
+	}
+
+	lower := strings.ToLower(note)
+	if strings.HasPrefix(lower, "here:") || strings.HasPrefix(lower, "topic:") {
+		idx := strings.Index(note, ":")
+		note = strings.TrimSpace(note[idx+1:])
+		if note == "" {
+			return "Catatan topik/grup tidak boleh kosong.", nil
+		}
+		cs := h.loadChatSettings(ctx, chatID)
+		cur := ""
+		if cs.TopicMemory != nil {
+			cur = strings.TrimRight(*cs.TopicMemory, "\r\n")
+		}
+		updated := "- " + note
+		if cur != "" {
+			updated = cur + "\n- " + note
+		}
+		cs.TopicMemory = &updated
+		if err := h.saveChatSettings(ctx, chatID, cs); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("📌 Disimpan ke **Memori Topik/Grup Ini**:\n> %s", note), nil
+	}
+
 	if h.runner.Memory == nil {
 		return "Memory store tidak aktif.", nil
 	}
-	note := strings.TrimSpace(arg)
-	if note == "" {
-		return "Pemakaian: `/remember <catatan>` (atau reply pesan apa pun dengan `/remember`).\nTambahkan awalan `user:` untuk menyimpan ke profil user.", nil
-	}
-
 	kind := memory.KindMemory
 	label := "MEMORY.md"
-	if strings.HasPrefix(strings.ToLower(note), "user:") {
+	switch {
+	case strings.HasPrefix(lower, "user:"):
 		kind = memory.KindUser
 		label = "USER.md"
 		note = strings.TrimSpace(note[len("user:"):])
+	case strings.HasPrefix(lower, "soul:"):
+		kind = memory.KindSoul
+		label = "SOUL.md"
+		note = strings.TrimSpace(note[len("soul:"):])
 	}
 	if note == "" {
 		return "Catatan tidak boleh kosong.", nil
@@ -87,8 +148,11 @@ func (h *telegramHandler) handleRememberCmd(arg string) (string, error) {
 
 	snap := h.runner.Memory.Snapshot()
 	existing := snap.Memory
-	if kind == memory.KindUser {
+	switch kind {
+	case memory.KindUser:
 		existing = snap.User
+	case memory.KindSoul:
+		existing = snap.Soul
 	}
 	existing = strings.TrimRight(existing, "\r\n")
 	updated := "- " + note
@@ -102,8 +166,115 @@ func (h *telegramHandler) handleRememberCmd(arg string) (string, error) {
 	return fmt.Sprintf("🧠 Disimpan ke `%s`:\n> %s", label, note), nil
 }
 
+func (h *telegramHandler) handleMemorySubCmd(ctx context.Context, chatID int64, arg string) (string, error) {
+	parts := strings.SplitN(strings.TrimSpace(arg), " ", 2)
+	sub := strings.ToLower(strings.TrimSpace(parts[0]))
+	rest := ""
+	if len(parts) > 1 {
+		rest = strings.TrimSpace(parts[1])
+	}
+
+	switch sub {
+	case "here", "topic":
+		cs := h.loadChatSettings(ctx, chatID)
+		if rest == "" {
+			val := "(kosong)"
+			if cs.TopicMemory != nil && strings.TrimSpace(*cs.TopicMemory) != "" {
+				val = strings.TrimSpace(*cs.TopicMemory)
+			}
+			return fmt.Sprintf("📌 **Memori Khusus Topik/Grup Ini:**\n%s\n\n💡 _Tambah dengan `/remember here: <catatan>`, ganti dengan `/memory here <isi>`, atau hapus dengan `/memory here clear`._", val), nil
+		}
+		if strings.EqualFold(rest, "clear") || strings.EqualFold(rest, "reset") {
+			empty := ""
+			cs.TopicMemory = &empty
+			if err := h.saveChatSettings(ctx, chatID, cs); err != nil {
+				return "", err
+			}
+			return "🧹 Memori khusus topik/grup ini dibersihkan.", nil
+		}
+		cs.TopicMemory = &rest
+		if err := h.saveChatSettings(ctx, chatID, cs); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("📌 Memori khusus topik/grup ini diperbarui (%d char).", utf8.RuneCountInString(rest)), nil
+
+	case "set", "write":
+		if h.runner.Memory == nil {
+			return "Memory store tidak aktif.", nil
+		}
+		if err := h.runner.Memory.Write(memory.KindMemory, rest); err != nil {
+			return "", err
+		}
+		h.invalidateAllPrompts()
+		return fmt.Sprintf("🧠 `MEMORY.md` diperbarui (%d char).", utf8.RuneCountInString(rest)), nil
+
+	case "user":
+		if h.runner.Memory == nil {
+			return "Memory store tidak aktif.", nil
+		}
+		if err := h.runner.Memory.Write(memory.KindUser, rest); err != nil {
+			return "", err
+		}
+		h.invalidateAllPrompts()
+		return fmt.Sprintf("👤 `USER.md` diperbarui (%d char).", utf8.RuneCountInString(rest)), nil
+
+	case "soul":
+		return h.handleSoulCmd(rest)
+
+	case "del", "rm", "delete":
+		if h.runner.Memory == nil {
+			return "Memory store tidak aktif.", nil
+		}
+		kind := memory.KindMemory
+		q := rest
+		if strings.HasPrefix(strings.ToLower(q), "user:") {
+			kind = memory.KindUser
+			q = strings.TrimSpace(q[len("user:"):])
+		}
+		removed, err := h.runner.Memory.DeleteEntry(kind, q)
+		if err != nil {
+			return "", err
+		}
+		h.invalidateAllPrompts()
+		return fmt.Sprintf("🗑️ Catatan dihapus:\n> %s", removed), nil
+
+	case "limit", "limits":
+		if h.runner.Memory == nil {
+			return "Memory store tidak aktif.", nil
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			m, u, s := h.runner.Memory.AllLimits()
+			return fmt.Sprintf("📏 **Batas Karakter Memory:**\n• `MEMORY.md`: `%d`\n• `USER.md`: `%d`\n• `SOUL.md`: `%d`\n\nUbah dengan: `/memory limit <memory> [user] [soul]`", m, u, s), nil
+		}
+		mLim, _ := strconv.Atoi(fields[0])
+		uLim := 0
+		sLim := 0
+		if len(fields) >= 2 {
+			uLim, _ = strconv.Atoi(fields[1])
+		}
+		if len(fields) >= 3 {
+			sLim, _ = strconv.Atoi(fields[2])
+		}
+		h.runner.Memory.SetLimits(mLim, uLim, sLim)
+		m, u, s := h.runner.Memory.AllLimits()
+		return fmt.Sprintf("✅ Batas karakter diubah: `MEMORY=%d`, `USER=%d`, `SOUL=%d`.", m, u, s), nil
+	default:
+		return "Subcommand `/memory`: `set <isi>`, `user <isi>`, `soul <isi>`, `here [isi|clear]`, `del <no|kata>`, `limit <angka>`.", nil
+	}
+}
+
+func (h *telegramHandler) handleUndoCmd() (string, error) {
+	bakDir := filepath.Join(config.Home(), "checkpoints")
+	restored, err := tool.RestoreLastCheckpoint(bakDir)
+	if err != nil {
+		return fmt.Sprintf("⏪ Tidak dapat undo: %v", err), nil
+	}
+	return fmt.Sprintf("⏪ **Undo berhasil!** File dikembalikan ke checkpoint terakhir:\n`%s`", restored), nil
+}
+
 func (h *telegramHandler) handleExportCmd(ctx context.Context, chatID int64) (string, error) {
-	msgs, err := h.store.Messages(ctx, chatID)
+	msgs, err := h.store.Messages(ctx, telegram.SessionChatID(ctx, chatID))
 	if err != nil {
 		return "", fmt.Errorf("gagal membaca riwayat: %w", err)
 	}

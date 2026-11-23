@@ -8,10 +8,10 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.6-blue.svg?style=flat-square&logo=github" alt="Version v1.2.6" /></a>
+  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.7-blue.svg?style=flat-square&logo=github" alt="Version v1.2.7" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
-  <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.4%20Rich%20Messages-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.4" />
+  <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.5%20Rich%20%26%20Topics-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.5" />
   <img src="https://img.shields.io/badge/Storage-SQLite%20WAL-0F172A?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite WAL" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=flat-square" alt="MIT License" /></a>
 </p>
@@ -208,16 +208,24 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 | `/restart` | ⚡ **Restart sesi seketika**: Memutus konteks lama & membatalkan proses/turn yang sedang berjalan di chat saat itu secara aman |
 | `/new` atau `/reset` | Memulai sesi baru (memutus riwayat aktif dan membekukan ulang snapshot memori) |
 | `/stop` | Menghentikan turn atau eksekusi tool yang sedang aktif berjalan di chat ini |
+| `/undo` | Mengembalikan file terakhir yang diubah oleh `write_file`/`patch` dari checkpoint otomatis |
 | `/approval [prompt\|auto\|deny]` | Mengatur mode persetujuan tool (konfirmasi tombol, auto-approve, atau tolak) secara persisten per chat |
-| `/config [key val]` | Mengubah pengaturan default (`auto_compact`, `compact_threshold`, `max_iterations`, `turn_timeout`, `warn_usd`, `max_usd`, `prompt_prefix`, `reset`) via tombol atau teks |
+| `/config [key val]` | Mengubah pengaturan default (`context`, `auto_compact`, `compact_threshold`, `max_iterations`, `turn_timeout`, `warn_usd`, `max_usd`, `prompt_prefix`, `reset`) via tombol atau teks |
+| `/context [ukuran]` | Melihat atau mengubah ukuran context window model aktif secara langsung (`32k`, `128k`, `200k`, `1m`) |
+| `/group [always\|mention\|topic\|new\|rename]` | Mengatur mode respons grup (`always` vs `mention`), filter topik forum, atau membuat/mengganti nama topik forum |
 | `/model` | Melihat model aktif, provider yang terpasang, dan daftar alias |
 | `/model <nama>` | Mengganti model aktif secara instan (contoh: `/model claude-3-5-sonnet` atau `/model groq:llama-3.3-70b`) |
+| `/model add <nama> <prov> [ctx]` | Menambahkan model baru ke `config.yaml` sekaligus mengaktifkannya (contoh: `/model add claude-3-7-sonnet anthropic 200k vision`) |
+| `/model rm <nama>` | Menghapus definisi model atau alias dari `config.yaml` |
+| `/account [add\|key\|use\|rm]` | Mengelola multi-akun provider & API key secara langsung (simpan aman ke `.env`, dukung akun cadangan seperti `openrouter2`) |
 | `/fallback` | Melihat status Smart Fallback, circuit-breaker cooldown, auto-discovery multi-provider, dan tombol reset |
 | `/skills` | Menampilkan katalog skill yang sedang dimuat beserta lapisan sumbernya |
 | `/skills <nama>` | Menampilkan isi detail deskripsi dan instruksi dari skill tertentu |
 | `/skills reload` | Memindai ulang berkas `SKILL.md` dari disk tanpa perlu me-restart bot |
-| `/memory` | Menampilkan isi catatan kerja `MEMORY.md` & `USER.md` beserta tombol Clear/Refresh interaktif |
-| `/remember <catatan>` | Menyimpan catatan cepat ke `MEMORY.md` (`user:<catatan>` untuk `USER.md`), atau reply pesan apa pun dengan `/remember` |
+| `/memory [set\|user\|soul\|here\|del\|limit]` | Melihat atau mengubah `MEMORY.md`, `USER.md`, `SOUL.md`, memori khusus topik/grup (`here`), hapus baris tertentu (`del`), dan ubah batas kuota (`limit`) |
+| `/soul [reset\|<teks>]` | Melihat, mengubah, atau me-reset `SOUL.md` (prinsip identitas bawaan **Zero Refusal & Action-First**) |
+| `/persona [reset\|<teks>]` | Mengatur persona/peran spesifik per topik forum, per grup, atau per chat secara terisolasi |
+| `/remember <catatan>` | Menyimpan catatan ke `MEMORY.md` (`user:` untuk `USER.md`, `soul:` untuk `SOUL.md`, `here:` khusus topik/grup ini), atau reply pesan dengan `/remember` |
 | `/export` | Mengekspor seluruh transkrip percakapan sesi aktif menjadi berkas Markdown (`.md`) |
 | `/logs [clear]` | Mengunduh file log error & diagnostik terbaru (otomatis dikirim saat error terjadi) |
 | `/cron` / `/cron list` | Menampilkan seluruh jadwal tugas otomatis yang terdaftar untuk chat ini |
@@ -241,9 +249,11 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 | `renstra restart [--start]` | Me-restart service systemd atau proses `renstra serve` yang sedang berjalan (jika ada) |
 | `renstra chat [model]` | REPL terminal interaktif dengan live metrics footer, syntax formatting, dan slash commands |
 | `renstra update [check]` | Memeriksa dan memperbarui binary RENSTRA ke versi rilis GitHub terbaru secara in-place |
-| `renstra migrate hermes` | Mengimpor memori, skills, config, server MCP, dan histori percakapan dari `~/.hermes` |
+| `renstra migrate hermes` | Mengimpor memori (`MEMORY.md`, `USER.md`, `SOUL.md`), `.env` (semua API key), seluruh akun provider, skills, server MCP, dan histori percakapan dari `~/.hermes` |
+| `renstra account [add\|key\|use\|rm]` | Mengelola multi-akun provider & API key (lihat status masked key, tambah akun baru/cadangan, ganti API key `.env`, hapus akun) |
 | `renstra model list` | Menampilkan daftar provider yang aktif, base URL, konfigurasi, dan alias model |
 | `renstra model set <ref>` | Mengubah `default_model` di `config.yaml` (`model`, `provider:model`, atau `alias`) |
+| `renstra model add <nama> [prov] [ctx]` | Menambahkan definisi model baru beserta `context`, `max_output`, `vision`, dan `alias` ke `config.yaml` |
 | `renstra skill list [--global]` | Melihat daftar skill terdaftar beserta deteksi konflik prioritas antar lapis |
 | `renstra skill add <dir\|git-url>` | Mengimpor skill dari direktori lokal atau repositori Git |
 | `renstra skill rm <nama>` | Menghapus skill dari lapisan yang dapat ditulis |

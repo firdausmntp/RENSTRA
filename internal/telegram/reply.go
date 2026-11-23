@@ -29,6 +29,23 @@ func replyTargetFrom(ctx context.Context) replyTarget {
 	return rt
 }
 
+// TopicIDFrom returns the active forum topic message_thread_id from ctx (0 if none).
+func TopicIDFrom(ctx context.Context) int64 {
+	return replyTargetFrom(ctx).threadID
+}
+
+// WithTopic attaches a forum topic message_thread_id to ctx.
+func WithTopic(ctx context.Context, threadID int64) context.Context {
+	rt := replyTargetFrom(ctx)
+	return withReplyTarget(ctx, rt.replyToID, threadID)
+}
+
+// SessionChatID returns an isolated session key per (chatID, threadID) when inside
+// a forum topic so different topics in the same group keep separate histories.
+func SessionChatID(ctx context.Context, chatID int64) int64 {
+	return turnScopeKey(chatID, TopicIDFrom(ctx))
+}
+
 func applyThreadOnly(ctx context.Context, payload map[string]any) {
 	rt := replyTargetFrom(ctx)
 	if rt.threadID > 0 {
@@ -65,11 +82,45 @@ func applyReplyFields(ctx context.Context, fields map[string]string) {
 	}
 }
 
+func (b *Bot) trackTopicName(m message) string {
+	threadID := m.MessageThreadID
+	var found string
+	if m.ForumTopicCreated != nil && strings.TrimSpace(m.ForumTopicCreated.Name) != "" {
+		found = strings.TrimSpace(m.ForumTopicCreated.Name)
+	} else if m.ForumTopicEdited != nil && strings.TrimSpace(m.ForumTopicEdited.Name) != "" {
+		found = strings.TrimSpace(m.ForumTopicEdited.Name)
+	} else if m.ReplyToMessage != nil && m.ReplyToMessage.ForumTopicCreated != nil && strings.TrimSpace(m.ReplyToMessage.ForumTopicCreated.Name) != "" {
+		found = strings.TrimSpace(m.ReplyToMessage.ForumTopicCreated.Name)
+	}
+	if threadID <= 0 {
+		return found
+	}
+	key := turnScopeKey(m.Chat.ID, threadID)
+	b.mu.Lock()
+	if b.topicNames == nil {
+		b.topicNames = map[int64]string{}
+	}
+	if found != "" {
+		b.topicNames[key] = found
+	} else {
+		found = b.topicNames[key]
+	}
+	b.mu.Unlock()
+	return found
+}
+
 func (b *Bot) appendReplyContext(ctx, turnCtx context.Context, m message, text string) (string, bool) {
+	topicName := b.trackTopicName(m)
+
 	var quoteText string
+	isTopicRootReply := m.ReplyToMessage != nil &&
+		m.ReplyToMessage.ForumTopicCreated != nil &&
+		strings.TrimSpace(m.ReplyToMessage.Text) == "" &&
+		strings.TrimSpace(m.ReplyToMessage.Caption) == ""
+
 	if m.Quote != nil && strings.TrimSpace(m.Quote.Text) != "" {
 		quoteText = truncate(strings.TrimSpace(m.Quote.Text), 1500)
-	} else if m.ReplyToMessage != nil {
+	} else if m.ReplyToMessage != nil && !isTopicRootReply {
 		qt := m.ReplyToMessage.Text
 		if qt == "" {
 			qt = m.ReplyToMessage.Caption
@@ -83,13 +134,47 @@ func (b *Bot) appendReplyContext(ctx, turnCtx context.Context, m message, text s
 	if strings.EqualFold(strings.TrimSpace(text), "/remember") && quoteText != "" {
 		return "/remember " + quoteText, true
 	}
+	// Do not inject context prefix into other slash commands so `/model`, `/status`, etc. parse cleanly.
+	if command(text) != "" {
+		return text, true
+	}
 
 	var prefixParts []string
+	var meta []string
+	if m.Chat.Type == "group" || m.Chat.Type == "supergroup" {
+		if strings.TrimSpace(m.Chat.Title) != "" {
+			meta = append(meta, fmt.Sprintf("Grup: %q", strings.TrimSpace(m.Chat.Title)))
+		} else {
+			meta = append(meta, fmt.Sprintf("Grup ID: %d", m.Chat.ID))
+		}
+	}
+	if topicName != "" {
+		meta = append(meta, fmt.Sprintf("Topik: %q (#%d)", topicName, m.MessageThreadID))
+	} else if m.IsTopicMessage && m.MessageThreadID > 0 {
+		meta = append(meta, fmt.Sprintf("Topik #%d", m.MessageThreadID))
+	}
+	if (m.Chat.Type == "group" || m.Chat.Type == "supergroup") && m.From != nil {
+		sender := strings.TrimSpace(m.From.FirstName)
+		if m.From.Username != "" {
+			if sender != "" {
+				sender += " (@" + m.From.Username + ")"
+			} else {
+				sender = "@" + m.From.Username
+			}
+		}
+		if sender != "" {
+			meta = append(meta, "Pengirim: "+sender)
+		}
+	}
+	if len(meta) > 0 {
+		prefixParts = append(prefixParts, "["+strings.Join(meta, " | ")+"]")
+	}
+
 	if quoteText != "" {
 		prefixParts = append(prefixParts, fmt.Sprintf("[Membalas pesan: %q]", quoteText))
 	}
 
-	if m.ReplyToMessage != nil && hasMsgAttachment(*m.ReplyToMessage) {
+	if m.ReplyToMessage != nil && !isTopicRootReply && hasMsgAttachment(*m.ReplyToMessage) {
 		attText, ok := b.prepareAttachmentText(ctx, turnCtx, *m.ReplyToMessage, "")
 		if !ok {
 			return "", false

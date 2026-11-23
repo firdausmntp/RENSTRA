@@ -15,12 +15,14 @@ import (
 type chatSettings struct {
 	AutoCompact      *bool    `json:"auto_compact,omitempty"`
 	CompactThreshold *float64 `json:"compact_threshold,omitempty"`
+	ContextWindow    *int     `json:"context_window,omitempty"`
 	MaxIterations    *int     `json:"max_iterations,omitempty"`
 	TurnTimeoutSec   *int     `json:"turn_timeout_sec,omitempty"`
 	WarnDailyUSD     *float64 `json:"warn_daily_usd,omitempty"`
 	MaxDailyUSD      *float64 `json:"max_daily_usd,omitempty"`
 	MaxDailyTokens   *int64   `json:"max_daily_tokens,omitempty"`
 	PromptPrefix     *string  `json:"prompt_prefix,omitempty"`
+	TopicMemory      *string  `json:"topic_memory,omitempty"`
 }
 
 func (h *telegramHandler) loadChatSettings(ctx context.Context, chatID int64) chatSettings {
@@ -28,7 +30,11 @@ func (h *telegramHandler) loadChatSettings(ctx context.Context, chatID int64) ch
 	if h.store == nil {
 		return cs
 	}
-	raw, err := h.store.GetChatSettings(ctx, chatID)
+	sessID := telegram.SessionChatID(ctx, chatID)
+	raw, err := h.store.GetChatSettings(ctx, sessID)
+	if (err != nil || raw == "") && sessID != chatID {
+		raw, err = h.store.GetChatSettings(ctx, chatID)
+	}
 	if err == nil && raw != "" {
 		_ = json.Unmarshal([]byte(raw), &cs)
 	}
@@ -47,6 +53,9 @@ func (h *telegramHandler) applyChatSettings(ctx context.Context, chatID int64, c
 			th = *cs.CompactThreshold
 		}
 		cr.SetAutoCompact(ac, th)
+	}
+	if cs.ContextWindow != nil && *cs.ContextWindow > 0 {
+		cr.SetContextWindow(*cs.ContextWindow)
 	}
 	if cs.MaxIterations != nil {
 		cr.SetMaxIters(*cs.MaxIterations)
@@ -67,8 +76,19 @@ func (h *telegramHandler) applyChatSettings(ctx context.Context, chatID int64, c
 		}
 		cr.SetLimits(lim)
 	}
-	if cs.PromptPrefix != nil {
-		cr.SetPromptPrefix(*cs.PromptPrefix)
+	if cs.PromptPrefix != nil || cs.TopicMemory != nil {
+		base := h.runner.PromptPrefix
+		if cs.PromptPrefix != nil {
+			base = *cs.PromptPrefix
+		}
+		if cs.TopicMemory != nil && strings.TrimSpace(*cs.TopicMemory) != "" {
+			if strings.TrimSpace(base) != "" {
+				base = strings.TrimSpace(base) + "\n\n[MEMORI TOPIK/GRUP INI]:\n" + strings.TrimSpace(*cs.TopicMemory)
+			} else {
+				base = "[MEMORI TOPIK/GRUP INI]:\n" + strings.TrimSpace(*cs.TopicMemory)
+			}
+		}
+		cr.SetPromptPrefix(base)
 	}
 }
 
@@ -77,8 +97,9 @@ func (h *telegramHandler) saveChatSettings(ctx context.Context, chatID int64, cs
 	if err != nil {
 		return err
 	}
+	sessID := telegram.SessionChatID(ctx, chatID)
 	if h.store != nil {
-		if err := h.store.SetChatSettings(ctx, chatID, string(raw)); err != nil {
+		if err := h.store.SetChatSettings(ctx, sessID, string(raw)); err != nil {
 			return err
 		}
 	}
@@ -88,13 +109,15 @@ func (h *telegramHandler) saveChatSettings(ctx context.Context, chatID int64, cs
 }
 
 func (h *telegramHandler) resetChatSettings(ctx context.Context, chatID int64) error {
+	sessID := telegram.SessionChatID(ctx, chatID)
 	if h.store != nil {
-		if err := h.store.SetChatSettings(ctx, chatID, ""); err != nil {
+		if err := h.store.SetChatSettings(ctx, sessID, ""); err != nil {
 			return err
 		}
 	}
 	cr := h.runnerForChat(ctx, chatID)
 	cr.SetAutoCompact(!h.runner.DisableAutoCompact, h.runner.Threshold)
+	cr.SetContextWindow(h.runner.ContextWindow)
 	cr.SetMaxIters(h.runner.MaxIters)
 	cr.SetTurnTimeout(h.runner.TurnTimeout)
 	cr.SetLimits(h.runner.Limits)
@@ -130,7 +153,12 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 		promptStatus = fmt.Sprintf("kustom (%d char)", len([]rune(cr.PromptPrefix)))
 	}
 
+	cw := cr.ContextWindow
+	if cw <= 0 {
+		cw = 32000
+	}
 	text := fmt.Sprintf("⚙️ **Pengaturan Default Chat (Halaman %d/%d)**\n"+
+		"• **Context Window:** `%d` tok\n"+
 		"• **Auto-Compact:** `%v` (threshold `%.0f%%`)\n"+
 		"• **Max Iterations:** `%d` iterasi/turn\n"+
 		"• **Turn Timeout:** `%s`\n"+
@@ -138,7 +166,7 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 		"• **Max Daily Tokens:** `%d`\n"+
 		"• **System Prompt Prefix:** `%s`\n\n"+
 		"Ubah via tombol di bawah atau ketik `/config <key> <val>`.",
-		page+1, totalPages, ac, th*100, mi, to, cr.Limits.WarnDailyUSD, cr.Limits.MaxDailyUSD, cr.Limits.MaxDailyTokens, promptStatus)
+		page+1, totalPages, cw, ac, th*100, mi, to, cr.Limits.WarnDailyUSD, cr.Limits.MaxDailyUSD, cr.Limits.MaxDailyTokens, promptStatus)
 
 	var rows [][]telegram.InlineButton
 	if page == 0 {
@@ -147,6 +175,12 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 			acBtn = telegram.InlineButton{Text: "🗜 Auto-Compact: OFF", CallbackData: "cfg:ac:1:0", Style: "danger"}
 		}
 		rows = append(rows, []telegram.InlineButton{acBtn})
+		rows = append(rows, []telegram.InlineButton{
+			pickBtn("Ctx 32k", cw == 32000, "cfg:cw:32000:0"),
+			pickBtn("Ctx 128k", cw == 128000, "cfg:cw:128000:0"),
+			pickBtn("Ctx 200k", cw == 200000, "cfg:cw:200000:0"),
+			pickBtn("Ctx 1M", cw == 1000000, "cfg:cw:1000000:0"),
+		})
 		rows = append(rows, []telegram.InlineButton{
 			pickBtn("Thresh 50%", fmt.Sprintf("%.2f", th) == "0.50", "cfg:th:0.50:0"),
 			pickBtn("Thresh 70%", fmt.Sprintf("%.2f", th) == "0.70", "cfg:th:0.70:0"),
@@ -219,6 +253,11 @@ func (h *telegramHandler) handleConfigCallback(ctx context.Context, chatID, msgI
 			cs.CompactThreshold = &v
 			_ = h.saveChatSettings(ctx, chatID, cs)
 		}
+	case "cw":
+		if v, err := strconv.Atoi(parts[2]); err == nil && v >= 4096 {
+			cs.ContextWindow = &v
+			_ = h.saveChatSettings(ctx, chatID, cs)
+		}
 	case "mi":
 		if v, err := strconv.Atoi(parts[2]); err == nil {
 			cs.MaxIterations = &v
@@ -269,6 +308,12 @@ func (h *telegramHandler) handleConfigCmd(ctx context.Context, chatID int64, arg
 			return "Nilai `compact_threshold` harus antara `0.3` dan `0.95`.", nil
 		}
 		cs.CompactThreshold = &v
+	case "context", "context_window":
+		v, err := parseTokenCount(val)
+		if err != nil || v < 4096 {
+			return "Nilai `context` minimal `4096` (contoh: `128000`, `128k`, `200k`, `1m`).", nil
+		}
+		cs.ContextWindow = &v
 	case "max_iterations":
 		v, err := strconv.Atoi(val)
 		if err != nil || v <= 0 {
@@ -315,4 +360,22 @@ func (h *telegramHandler) handleConfigCmd(ctx context.Context, chatID int64, arg
 		return "", err
 	}
 	return fmt.Sprintf("✅ Pengaturan `%s` diperbarui menjadi `%s`.", key, val), nil
+}
+
+func parseTokenCount(raw string) (int, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	mult := 1
+	switch {
+	case strings.HasSuffix(s, "k"):
+		mult = 1000
+		s = strings.TrimSuffix(s, "k")
+	case strings.HasSuffix(s, "m"):
+		mult = 1000000
+		s = strings.TrimSuffix(s, "m")
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return 0, err
+	}
+	return v * mult, nil
 }

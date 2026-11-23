@@ -129,3 +129,50 @@ func unknownProviderError(providerName string, cfg *Config) (ProviderConfig, str
 	sort.Strings(names)
 	return ProviderConfig{}, "", fmt.Errorf("provider %q tidak dikenal (tersedia: %s)", providerName, strings.Join(names, ", "))
 }
+
+// DefaultModelConfig infers realistic context window, max output, and vision
+// capabilities for well-known model families when not explicitly set in YAML.
+func DefaultModelConfig(model string) ModelConfig {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if idx := strings.LastIndex(m, "/"); idx >= 0 {
+		m = m[idx+1:]
+	}
+	switch {
+	case strings.HasPrefix(m, "gemini-1.5"),
+		strings.HasPrefix(m, "gemini-2"),
+		strings.HasPrefix(m, "gemini-exp"),
+		strings.HasPrefix(m, "gpt-4.1"),
+		strings.HasPrefix(m, "gpt-5"):
+		return ModelConfig{Context: 1000000, MaxOutput: 8192, Vision: true}
+	case strings.HasPrefix(m, "claude-3"),
+		strings.HasPrefix(m, "claude-sonnet"),
+		strings.HasPrefix(m, "claude-opus"),
+		strings.HasPrefix(m, "claude-haiku"),
+		strings.HasPrefix(m, "claude-4"),
+		strings.HasPrefix(m, "o1"),
+		strings.HasPrefix(m, "o3"),
+		strings.HasPrefix(m, "o4"):
+		return ModelConfig{Context: 200000, MaxOutput: 8192, Vision: true}
+	case strings.HasPrefix(m, "gpt-4o"),
+		strings.HasPrefix(m, "chatgpt-4o"),
+		strings.HasPrefix(m, "gpt-4-turbo"),
+		strings.HasPrefix(m, "grok-2"),
+		strings.HasPrefix(m, "grok-3"),
+		strings.HasPrefix(m, "grok-4"),
+		strings.HasPrefix(m, "pixtral"),
+		strings.HasPrefix(m, "mistral-large"),
+		strings.HasPrefix(m, "mistral-small"):
+		return ModelConfig{Context: 128000, MaxOutput: 4096, Vision: true}
+	case strings.HasPrefix(m, "llama-3.1"),
+		strings.HasPrefix(m, "llama-3.2"),
+		strings.HasPrefix(m, "llama-3.3"),
+		strings.HasPrefix(m, "llama-4"),
+		strings.HasPrefix(m, "deepseek"),
+		strings.HasPrefix(m, "qwen2.5"),
+		strings.HasPrefix(m, "qwen3"),
+		strings.HasPrefix(m, "codestral"):
+		return ModelConfig{Context: 128000, MaxOutput: 4096}
+	default:
+		return ModelConfig{Context: 32000}
+	}
+}

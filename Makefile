@@ -1,6 +1,6 @@
 BINARY  := renstra
 CMD     := ./cmd/renstra
-VERSION ?= v1.2.6
+VERSION ?= v1.2.7
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
 .PHONY: all build test vet clean linux-amd64 linux-arm64

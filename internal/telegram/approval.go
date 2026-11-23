@@ -17,11 +17,10 @@ func (b *Bot) handleCallback(ctx context.Context, cq callbackQuery) {
 		return
 	}
 	chatID := cq.Message.Chat.ID
-	if len(b.allowed) > 0 && cq.From.ID > 0 {
-		if _, ok := b.allowed[cq.From.ID]; !ok {
-			return
-		}
+	if len(b.allowed) > 0 && cq.From.ID != 0 && !b.isChatOrUserAllowed(chatID, &cq.From) {
+		return
 	}
+	ctx = withReplyTarget(ctx, cq.Message.MessageID, cq.Message.MessageThreadID)
 
 	action, id, ok := parseCallback(cq.Data)
 	if !ok || (action != "approve" && action != "deny" && action != "auto") {

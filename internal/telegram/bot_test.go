@@ -181,16 +181,49 @@ func TestUnauthorizedChatDenied(t *testing.T) {
 	}
 }
 
-func TestGroupChatRejected(t *testing.T) {
+func TestGroupChatAllowedByChatOrFromUser(t *testing.T) {
 	api, b := newAPI(t)
 	h := &fakeHandler{reply: "ok"}
-	b.handleUpdate(context.Background(), h, textUpdate(2, 42, "group", "halo"))
 
-	if got := h.calls.Load(); got != 0 {
-		t.Fatalf("handler dipanggil %d kali, mau 0", got)
+	// 1. Group chat whose chatID is in AllowedUsers (42) works directly
+	b.handleUpdate(context.Background(), h, textUpdate(2, 42, "group", "halo grup"))
+	if got := h.calls.Load(); got != 1 {
+		t.Fatalf("handler dipanggil %d kali, mau 1", got)
 	}
-	if got := api.texts(); len(got) != 1 || got[0] != "DM saya langsung" {
+	if got := api.texts(); len(got) != 1 || got[0] != "ok" {
 		t.Fatalf("balasan %q", got)
+	}
+
+	// 2. Supergroup (-100999) where sender From.ID (42) is in AllowedUsers also works
+	uSuper := update{
+		UpdateID: 3,
+		Message: &message{
+			MessageID:       10,
+			MessageThreadID: 777,
+			IsTopicMessage:  true,
+			From:            &tgUser{ID: 42, FirstName: "Budi", Username: "budi"},
+			Chat:            chat{ID: -100999, Type: "supergroup", Title: "Tim Dev", IsForum: true},
+			Text:            "halo topik",
+		},
+	}
+	b.handleUpdate(context.Background(), h, uSuper)
+	if got := h.calls.Load(); got != 2 {
+		t.Fatalf("supergroup dengan allowed From.ID seharusnya diproses, calls=%d", got)
+	}
+
+	// 3. Unauthorized user in unauthorized group is silently ignored on normal text
+	uUnauth := update{
+		UpdateID: 4,
+		Message: &message{
+			MessageID: 11,
+			From:      &tgUser{ID: 999},
+			Chat:      chat{ID: -100888, Type: "supergroup"},
+			Text:      "pesan member lain",
+		},
+	}
+	b.handleUpdate(context.Background(), h, uUnauth)
+	if got := h.calls.Load(); got != 2 {
+		t.Fatalf("unauthorized group message tidak boleh diproses, calls=%d", got)
 	}
 }
 

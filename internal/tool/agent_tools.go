@@ -17,10 +17,10 @@ func NewMemory(s *memory.Store) *Memory { return &Memory{store: s} }
 
 func (t *Memory) Name() string { return "memory" }
 func (t *Memory) Description() string {
-	return "Mengelola catatan permanen lintas sesi. target=memory untuk catatanmu, target=user untuk profil user. action=read|write. Batas karakter ditegakkan: 2200 (memory), 1375 (user)."
+	return "Mengelola catatan permanen lintas sesi. target=memory untuk catatanmu (MEMORY.md), target=user untuk profil user (USER.md), target=soul untuk prinsip/identitas inti (SOUL.md). action=read|write. Batas karakter: 2200 (memory), 1375 (user), 4000 (soul)."
 }
 func (t *Memory) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","enum":["memory","user"]},"action":{"type":"string","enum":["read","write"]},"content":{"type":"string"}},"required":["target","action"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"target":{"type":"string","enum":["memory","user","soul"]},"action":{"type":"string","enum":["read","write"]},"content":{"type":"string"}},"required":["target","action"]}`)
 }
 func (t *Memory) Danger() bool { return false }
 
@@ -40,6 +40,8 @@ func (t *Memory) Execute(ctx context.Context, raw json.RawMessage) (string, erro
 		kind = memory.KindMemory
 	case "user":
 		kind = memory.KindUser
+	case "soul":
+		kind = memory.KindSoul
 	default:
 		return "", fmt.Errorf("target tidak dikenal: %q", in.Target)
 	}
@@ -47,10 +49,14 @@ func (t *Memory) Execute(ctx context.Context, raw json.RawMessage) (string, erro
 	switch in.Action {
 	case "read":
 		snap := t.store.Snapshot()
-		if kind == memory.KindMemory {
+		switch kind {
+		case memory.KindMemory:
 			return snap.Memory, nil
+		case memory.KindSoul:
+			return snap.Soul, nil
+		default:
+			return snap.User, nil
 		}
-		return snap.User, nil
 	case "write":
 		if err := t.store.Write(kind, in.Content); err != nil {
 			return "", err

@@ -51,17 +51,35 @@ type messageGenerationStopped struct {
 }
 
 type message struct {
-	MessageID       int64        `json:"message_id"`
-	MessageThreadID int64        `json:"message_thread_id"`
-	Text            string       `json:"text"`
-	Caption         string       `json:"caption"`
-	Chat            chat         `json:"chat"`
-	ReplyToMessage  *message     `json:"reply_to_message"`
-	Quote           *tgTextQuote `json:"quote"`
-	Document        *tgDocument  `json:"document"`
-	Photo           []tgPhoto    `json:"photo"`
-	Voice           *tgVoice     `json:"voice"`
-	Audio           *tgAudio     `json:"audio"`
+	MessageID          int64                 `json:"message_id"`
+	MessageThreadID    int64                 `json:"message_thread_id"`
+	IsTopicMessage     bool                  `json:"is_topic_message"`
+	From               *tgUser               `json:"from"`
+	Text               string                `json:"text"`
+	Caption            string                `json:"caption"`
+	Chat               chat                  `json:"chat"`
+	ReplyToMessage     *message              `json:"reply_to_message"`
+	Quote              *tgTextQuote          `json:"quote"`
+	ForumTopicCreated  *tgForumTopic         `json:"forum_topic_created"`
+	ForumTopicEdited   *tgForumTopic         `json:"forum_topic_edited"`
+	WriteAccessAllowed *tgWriteAccessAllowed `json:"write_access_allowed"`
+	Document           *tgDocument           `json:"document"`
+	Photo              []tgPhoto             `json:"photo"`
+	Voice              *tgVoice              `json:"voice"`
+	Audio              *tgAudio              `json:"audio"`
+}
+
+type tgForumTopic struct {
+	Name string `json:"name"`
+}
+
+// tgWriteAccessAllowed represents Bot API 10.5 WriteAccessAllowed service message
+// (including inviter user when joined via https://t.me/botinvite/<bot_username>).
+type tgWriteAccessAllowed struct {
+	FromRequest        bool    `json:"from_request,omitempty"`
+	WebAppName         string  `json:"web_app_name,omitempty"`
+	FromAttachmentMenu bool    `json:"from_attachment_menu,omitempty"`
+	Inviter            *tgUser `json:"inviter,omitempty"`
 }
 
 type tgTextQuote struct {
@@ -98,17 +116,24 @@ type tgPhoto struct {
 }
 
 type chat struct {
-	ID   int64  `json:"id"`
-	Type string `json:"type"`
+	ID      int64  `json:"id"`
+	Type    string `json:"type"`
+	Title   string `json:"title,omitempty"`
+	IsForum bool   `json:"is_forum,omitempty"`
 }
 
 type callbackQuery struct {
-	ID      string   `json:"id"`
-	From    tgUser   `json:"from"`
-	Data    string   `json:"data"`
-	Message *message `json:"message"`
+	ID              string   `json:"id"`
+	From            tgUser   `json:"from"`
+	Message         *message `json:"message"`
+	InlineMessageID string   `json:"inline_message_id,omitempty"`
+	ChatInstance    string   `json:"chat_instance,omitempty"`
+	Data            string   `json:"data"`
 }
 
 type tgUser struct {
-	ID int64 `json:"id"`
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot,omitempty"`
+	FirstName string `json:"first_name,omitempty"`
+	Username  string `json:"username,omitempty"`
 }

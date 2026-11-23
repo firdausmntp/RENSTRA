@@ -145,6 +145,7 @@ func (r *Runner) system() string {
 		}
 		if r.Memory != nil {
 			snap := r.Memory.Snapshot()
+			params.Soul = snap.Soul
 			params.Memory = snap.Memory
 			params.UserProfile = snap.User
 		}

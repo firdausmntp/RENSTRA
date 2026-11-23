@@ -1,5 +1,6 @@
-// Package telegram implements the Telegram Bot API client used by the renstra
-// gateway: long polling, per-chat turns, dedup, and inline approval.
+// Package telegram implements the Telegram Bot API client (up to Bot API 10.5)
+// used by the renstra gateway: long polling, group & forum topic turns, dedup,
+// rich messages, and inline approval.
 package telegram
 
 import (
@@ -28,6 +29,9 @@ const (
 type Config struct {
 	Token         string
 	AllowedUsers  []int64
+	AllowedTopics []int64 // Optional: restrict forum topic handling to specific message_thread_ids
+	GroupMode     string  // "always" (default) or "mention" (only /cmd, @bot, or reply-to-bot in groups)
+	BotUsername   string  // Optional @username for group mention matching (auto-filled by GetMe)
 	PollTimeout   time.Duration
 	APIBase       string
 	WorkspaceDir  string
@@ -49,6 +53,10 @@ type Bot struct {
 	pollTimeout   time.Duration
 	workspaceDir  string
 	allowed       map[int64]struct{}
+	allowedTopics map[int64]struct{}
+	groupMode     string
+	botUsername   string
+	updateFooter  string
 	onSeen        func(int64)
 	onAutoApprove func(int64)
 	onCallback    func(context.Context, int64, int64, string)
@@ -62,6 +70,7 @@ type Bot struct {
 	cancels     map[int64]turnHandle
 	locks       map[int64]*chatLock
 	pending     map[int64]*pendingApproval
+	topicNames  map[int64]string
 	approvalSeq int64
 	turnSeq     int64
 	draftSeq    int64
@@ -101,22 +110,37 @@ func New(cfg Config) (*Bot, error) {
 	for _, id := range cfg.AllowedUsers {
 		allowed[id] = struct{}{}
 	}
+	topics := make(map[int64]struct{}, len(cfg.AllowedTopics))
+	for _, tid := range cfg.AllowedTopics {
+		if tid > 0 {
+			topics[tid] = struct{}{}
+		}
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.MaxIdleConns = 32
+	tr.MaxIdleConnsPerHost = 16
+	tr.IdleConnTimeout = 90 * time.Second
+
 	return &Bot{
 		token:         cfg.Token,
 		apiBase:       base,
 		pollTimeout:   poll,
 		workspaceDir:  cfg.WorkspaceDir,
 		allowed:       allowed,
+		allowedTopics: topics,
+		groupMode:     strings.TrimSpace(cfg.GroupMode),
+		botUsername:   strings.TrimPrefix(strings.TrimSpace(cfg.BotUsername), "@"),
 		onSeen:        cfg.OnSeen,
 		onAutoApprove: cfg.OnAutoApprove,
 		onCallback:    cfg.OnCallback,
 		onErrorLog:    cfg.OnErrorLog,
 		transcribe:    cfg.Transcribe,
-		http:          &http.Client{Timeout: poll + 30*time.Second},
+		http:          &http.Client{Timeout: poll + 30*time.Second, Transport: tr},
 		seen:          map[int64]struct{}{},
 		cancels:       map[int64]turnHandle{},
 		locks:         map[int64]*chatLock{},
 		pending:       map[int64]*pendingApproval{},
+		topicNames:    map[int64]string{},
 	}, nil
 }
 
@@ -125,24 +149,6 @@ func New(cfg Config) (*Bot, error) {
 func (b *Bot) MarkSeen(id int64) {
 	b.mu.Lock()
 	b.markSeenLocked(id)
-	b.mu.Unlock()
-}
-
-// RegisterCancel stores the cancel func for the active turn of a chat.
-func (b *Bot) RegisterCancel(chatID int64, cancel context.CancelFunc) int64 {
-	b.mu.Lock()
-	b.turnSeq++
-	gen := b.turnSeq
-	b.cancels[chatID] = turnHandle{cancel: cancel, gen: gen}
-	b.mu.Unlock()
-	return gen
-}
-
-func (b *Bot) clearCancel(chatID int64, gen int64) {
-	b.mu.Lock()
-	if cur, ok := b.cancels[chatID]; ok && cur.gen == gen {
-		delete(b.cancels, chatID)
-	}
 	b.mu.Unlock()
 }
 
@@ -235,77 +241,53 @@ func (b *Bot) handleUpdate(ctx context.Context, h Handler, u update) {
 	}
 }
 
-func (b *Bot) handleGenerationStopped(ev messageGenerationStopped) {
-	if _, ok := b.allowed[ev.Chat.ID]; !ok {
-		return
-	}
-	b.mu.Lock()
-	h, ok := b.cancels[ev.Chat.ID]
-	delete(b.cancels, ev.Chat.ID)
-	b.mu.Unlock()
-	if ok && h.cancel != nil {
-		h.cancel()
-	}
-}
-
-func (b *Bot) lockChat(chatID int64) func() {
-	b.mu.Lock()
-	l := b.locks[chatID]
-	if l == nil {
-		l = &chatLock{}
-		b.locks[chatID] = l
-	}
-	l.refs++
-	if h, ok := b.cancels[chatID]; ok && h.cancel != nil {
-		h.cancel()
-	}
-	b.mu.Unlock()
-
-	l.mu.Lock()
-	return func() {
-		l.mu.Unlock()
-		b.mu.Lock()
-		l.refs--
-		if l.refs <= 0 {
-			delete(b.locks, chatID)
-		}
-		b.mu.Unlock()
-	}
-}
-
 func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
-	if m.Chat.Type != "private" {
-		b.reply(ctx, m.Chat.ID, "DM saya langsung")
+	if m.Chat.Type != "private" && m.Chat.Type != "group" && m.Chat.Type != "supergroup" {
 		return
 	}
-	if _, ok := b.allowed[m.Chat.ID]; !ok {
-		b.reply(ctx, m.Chat.ID, "tidak diizinkan")
-		return
-	}
+	b.trackTopicName(m)
+	ctx = withReplyTarget(ctx, m.MessageID, m.MessageThreadID)
 
 	text := m.Text
 	if text == "" {
 		text = m.Caption
 	}
-	ctx = withReplyTarget(ctx, m.MessageID, m.MessageThreadID)
+
+	if !b.isChatOrUserAllowed(m.Chat.ID, m.From) {
+		if m.Chat.Type == "private" || command(text) != "" {
+			b.reply(ctx, m.Chat.ID, "tidak diizinkan")
+		}
+		return
+	}
+	if !b.isRelevantTopic(m) {
+		return
+	}
+	var shouldHandle bool
+	text, shouldHandle = b.filterGroupMessage(m, text)
+	if !shouldHandle {
+		return
+	}
 
 	switch command(text) {
 	case "/start":
-		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, StartText, DefaultQuickMenu())
+		st := StartText
+		if uf := b.UpdateFooter(); uf != "" {
+			st += "\n\n" + uf
+		}
+		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, st, DefaultQuickMenu())
 		return
 	case "/help":
-		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, HelpText, HelpQuickMenu())
+		ht := HelpText
+		if uf := b.UpdateFooter(); uf != "" {
+			ht += "\n\n" + uf
+		}
+		_ = b.SendMessageWithKeyboard(ctx, m.Chat.ID, ht, HelpQuickMenu())
 		return
 	case "/stop":
-		b.mu.Lock()
-		ch, ok := b.cancels[m.Chat.ID]
-		delete(b.cancels, m.Chat.ID)
-		b.mu.Unlock()
-		if !ok || ch.cancel == nil {
+		if !b.stopActiveTurn(m.Chat.ID, m.MessageThreadID) {
 			b.reply(ctx, m.Chat.ID, "tidak ada yang berjalan")
 			return
 		}
-		ch.cancel()
 		b.reply(ctx, m.Chat.ID, "dihentikan")
 		return
 	}
@@ -318,14 +300,14 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 	if h == nil {
 		return
 	}
-	unlock := b.lockChat(m.Chat.ID)
+	unlock := b.lockScope(m.Chat.ID, m.MessageThreadID)
 	defer unlock()
 
 	turnCtx, turnCancel := context.WithCancel(ctx)
-	gen := b.RegisterCancel(m.Chat.ID, turnCancel)
+	gen := b.RegisterTopicCancel(m.Chat.ID, m.MessageThreadID, turnCancel)
 	defer func() {
 		turnCancel()
-		b.clearCancel(m.Chat.ID, gen)
+		b.clearTopicCancel(m.Chat.ID, m.MessageThreadID, gen)
 	}()
 
 	typingDone := make(chan struct{})
@@ -353,7 +335,7 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 			return
 		}
 	}
-	if m.ReplyToMessage != nil || m.Quote != nil {
+	if m.Chat.Type != "private" || m.MessageThreadID > 0 || m.ReplyToMessage != nil || m.Quote != nil {
 		var ok bool
 		text, ok = b.appendReplyContext(ctx, turnCtx, m, text)
 		if !ok {
@@ -376,13 +358,4 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		return
 	}
 	b.reply(ctx, m.Chat.ID, out)
-}
-
-func (b *Bot) sendErrorLogIfAny(ctx context.Context, chatID int64, err error) {
-	if b.onErrorLog == nil || err == nil || errors.Is(err, context.Canceled) {
-		return
-	}
-	if logPath := b.onErrorLog(ctx, chatID, err); logPath != "" {
-		_ = b.SendDocument(ctx, chatID, logPath, "🪵 Log error diagnostik")
-	}
 }

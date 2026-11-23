@@ -97,7 +97,10 @@ const HelpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
 	"• `/new`, `/reset`, atau `/restart` — mulai sesi baru; riwayat diputus, memori di-freeze ulang\n" +
 	"• `/stop` — hentikan tugas yang sedang berjalan\n" +
 	"• `/approval [prompt|auto|deny]` — atur mode persetujuan eksekusi tool\n" +
-	"• `/config [key val]` — ubah pengaturan default (auto_compact, threshold, max_iters, timeout, limits, prompt)\n" +
+	"• `/undo` — kembalikan file terakhir yang diubah agent dari checkpoint\n" +
+	"• `/config [key val]` — ubah pengaturan default (context, auto_compact, threshold, max_iters, timeout, limits, prompt)\n" +
+	"• `/context [ukuran]` — lihat atau ubah ukuran context window (`32k`, `128k`, `200k`, `1m`)\n" +
+	"• `/group [always|mention|topic]` — kontrol mode respons grup & filter topik forum\n" +
 	"• `/status` — ringkasan status sesi, model, konteks & biaya\n" +
 	"• `/export` — export transkrip sesi aktif menjadi file `.md`\n" +
 	"• `/logs` — unduh file log error & diagnostik terbaru (`/logs clear` untuk hapus)\n" +
@@ -105,10 +108,14 @@ const HelpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
 	"🧠 **Model & Kecerdasan**\n" +
 	"• `/model` — model aktif + daftar provider, model & alias\n" +
 	"• `/model <nama>` — ganti model (nama, alias, atau provider:model)\n" +
+	"• `/model add <nama> <provider> [ctx]` — tambah & aktifkan model baru ke `config.yaml`\n" +
+	"• `/account [add|key|use|rm]` — kelola multi-akun provider & API key secara langsung\n" +
 	"• `/fallback` — status Smart Fallback, circuit breaker & auto-discovery\n" +
 	"• `/skills` — daftar skill terdaftar (/skills <nama> untuk isi lengkap)\n" +
 	"• `/skills reload` — scan ulang skill dari disk\n" +
 	"• `/memory` — lihat & kelola memori jangka panjang & profil user\n" +
+	"• `/soul [reset|<teks>]` — lihat atau ubah `SOUL.md` (prinsip inti Zero Refusal)\n" +
+	"• `/persona [reset|<teks>]` — atur persona/peran khusus per topik, grup, atau chat\n" +
 	"• `/remember <catatan>` — simpan catatan ke memori (atau reply pesan dgn `/remember`)\n\n" +
 	"⏰ **Otomasi (Cron)**\n" +
 	"• `/cron list` — lihat semua jadwal\n" +

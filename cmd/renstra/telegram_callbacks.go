@@ -29,6 +29,8 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 			text, rows = telegram.HelpText, telegram.HelpQuickMenu()
 		case "model":
 			text, rows = h.buildModelMenu(ctx, chatID, 0)
+		case "account":
+			text, rows = h.buildAccountMenu(ctx, chatID)
 		case "approval":
 			text, rows = h.buildApprovalMenu(ctx, chatID)
 		case "skills":
@@ -41,6 +43,8 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 			text, rows = h.buildMemoryMenu()
 		case "fallback":
 			text, rows = h.buildFallbackMenu(ctx, chatID)
+		case "group":
+			text, rows = h.buildGroupMenu(ctx, chatID)
 		case "status":
 			text, rows = h.buildStatusMenu(ctx, chatID)
 		default:
@@ -56,6 +60,12 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 
 	case "fb":
 		h.handleFallbackCallback(ctx, chatID, msgID, parts)
+
+	case "grp":
+		h.handleGroupCallback(ctx, chatID, msgID, parts)
+
+	case "acc":
+		h.handleAccountCallback(ctx, chatID, msgID, parts)
 
 	case "mdl":
 		if len(parts) < 3 {

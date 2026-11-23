@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"renstra/internal/config"
 	"renstra/internal/store"
 	"renstra/internal/telegram"
+	"renstra/internal/tool"
 )
 
 type telegramHandler struct {
@@ -24,26 +24,52 @@ type telegramHandler struct {
 	errLog          *errorLogRecorder
 	approvalTimeout time.Duration
 
-	mu    sync.Mutex
-	chats map[int64]*agent.Runner
+	mu            sync.Mutex
+	chats         map[int64]*agent.Runner
+	latestVersion string
+}
+
+func (h *telegramHandler) SetLatestVersion(tag string) {
+	t := strings.TrimSpace(tag)
+	h.mu.Lock()
+	h.latestVersion = t
+	h.mu.Unlock()
+	if h.bot != nil && t != "" {
+		h.bot.SetUpdateFooter(fmt.Sprintf("💡 *Update tersedia:* `%s` (saat ini `%s`) • Jalankan `renstra update` di server.", t, version))
+	}
+}
+
+func (h *telegramHandler) updateFooter() string {
+	h.mu.Lock()
+	t := h.latestVersion
+	h.mu.Unlock()
+	if t == "" || strings.EqualFold(t, version) {
+		return ""
+	}
+	return fmt.Sprintf("\n\n---\n💡 *Update tersedia:* `%s` (saat ini `%s`) • Jalankan `renstra update` di server.", t, version)
 }
 
 func (h *telegramHandler) runnerForChat(ctx context.Context, chatID int64) *agent.Runner {
+	sessID := telegram.SessionChatID(ctx, chatID)
 	h.mu.Lock()
 	if h.chats == nil {
 		h.chats = map[int64]*agent.Runner{}
 	}
-	cr := h.chats[chatID]
+	cr := h.chats[sessID]
 	if cr != nil {
 		h.mu.Unlock()
 		return cr
 	}
 	cr = h.runner.Clone()
-	h.chats[chatID] = cr
+	h.chats[sessID] = cr
 	h.mu.Unlock()
 
 	if h.store != nil {
-		if savedRef, err := h.store.GetChatModel(ctx, chatID); err == nil && savedRef != "" {
+		savedRef, err := h.store.GetChatModel(ctx, sessID)
+		if (err != nil || savedRef == "") && sessID != chatID {
+			savedRef, err = h.store.GetChatModel(ctx, chatID)
+		}
+		if err == nil && savedRef != "" {
 			if h.cfg != nil && len(h.cfg.Providers) > 0 {
 				if pcfg, model, rerr := config.Resolve(savedRef, h.cfg); rerr == nil {
 					if prov, perr := buildProvider(pcfg); perr == nil {
@@ -56,7 +82,11 @@ func (h *telegramHandler) runnerForChat(ctx context.Context, chatID int64) *agen
 				cr.SetModel(nil, savedRef, 0, 0, 0, 0)
 			}
 		}
-		if savedMode, err := h.store.GetChatApprovalMode(ctx, chatID); err == nil && savedMode != "" {
+		savedMode, err := h.store.GetChatApprovalMode(ctx, sessID)
+		if (err != nil || savedMode == "") && sessID != chatID {
+			savedMode, err = h.store.GetChatApprovalMode(ctx, chatID)
+		}
+		if err == nil && savedMode != "" {
 			cr.SetApprovalMode(savedMode)
 		}
 		h.applyChatSettings(ctx, chatID, cr)
@@ -65,10 +95,11 @@ func (h *telegramHandler) runnerForChat(ctx context.Context, chatID int64) *agen
 }
 
 func (h *telegramHandler) setApprovalMode(ctx context.Context, chatID int64, mode string) error {
+	sessID := telegram.SessionChatID(ctx, chatID)
 	cr := h.runnerForChat(ctx, chatID)
 	cr.SetApprovalMode(mode)
 	if h.store != nil {
-		return h.store.SetChatApprovalMode(ctx, chatID, mode)
+		return h.store.SetChatApprovalMode(ctx, sessID, mode)
 	}
 	return nil
 }
@@ -104,9 +135,11 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		}
 	}
 
+	sessID := telegram.SessionChatID(ctx, chatID)
+
 	switch cmd {
 	case "/new", "/reset", "/restart":
-		if err := h.store.SessionBreak(ctx, chatID); err != nil {
+		if err := h.store.SessionBreak(ctx, sessID); err != nil {
 			return "", fmt.Errorf("gagal reset sesi: %w", err)
 		}
 		h.invalidateAllPrompts()
@@ -156,7 +189,7 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			monthU.TokensIn, monthU.TokensOut, monthU.CostUSD), nil
 
 	case "/compact":
-		summary, err := h.runner.ForceCompact(ctx, chatID)
+		summary, err := h.runner.ForceCompact(ctx, sessID)
 		if err != nil {
 			return "", fmt.Errorf("gagal kompaksi: %w", err)
 		}
@@ -173,6 +206,15 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			}
 		}
 		return h.handleModelCmd(ctx, chatID, arg)
+
+	case "/account", "/accounts", "/provider":
+		if (arg == "" || strings.EqualFold(arg, "list")) && h.bot != nil {
+			aText, rows := h.buildAccountMenu(ctx, chatID)
+			if err := h.bot.SendMessageWithKeyboard(ctx, chatID, aText, rows); err == nil {
+				return "", nil
+			}
+		}
+		return h.handleAccountCmd(ctx, chatID, arg)
 
 	case "/skills":
 		if (arg == "" || strings.EqualFold(arg, "reload")) && h.bot != nil {
@@ -218,10 +260,35 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		}
 		return h.handleConfigCmd(ctx, chatID, arg)
 
+	case "/context":
+		if arg == "" {
+			cr := h.runnerForChat(ctx, chatID)
+			win := cr.ContextWindow
+			if win <= 0 {
+				win = 32000
+			}
+			msgs, _ := h.store.Messages(ctx, sessID)
+			used := agent.EstimateTokens(msgs)
+			return fmt.Sprintf("📏 **Context Window Aktif:** `%d` tok (terpakai ~`%d` tok)\nUbah dengan: `/context 128k` atau `/config context 200k`", win, used), nil
+		}
+		return h.handleConfigCmd(ctx, chatID, "context "+arg)
+
+	case "/group":
+		if arg == "" && h.bot != nil {
+			gText, rows := h.buildGroupMenu(ctx, chatID)
+			if err := h.bot.SendMessageWithKeyboard(ctx, chatID, gText, rows); err == nil {
+				return "", nil
+			}
+		}
+		return h.handleGroupCmd(ctx, chatID, arg)
+
 	case "/version":
-		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version), nil
+		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version) + h.updateFooter(), nil
 
 	case "/memory":
+		if arg != "" {
+			return h.handleMemorySubCmd(ctx, chatID, arg)
+		}
 		mText, rows := h.buildMemoryMenu()
 		if h.bot != nil && len(rows) > 0 {
 			if err := h.bot.SendMessageWithKeyboard(ctx, chatID, mText, rows); err == nil {
@@ -246,7 +313,16 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 			utf8.RuneCountInString(snap.User), userLim, userText), nil
 
 	case "/remember":
-		return h.handleRememberCmd(arg)
+		return h.handleRememberCmd(ctx, chatID, arg)
+
+	case "/undo":
+		return h.handleUndoCmd()
+
+	case "/soul":
+		return h.handleSoulCmd(arg)
+
+	case "/persona":
+		return h.handlePersonaCmd(ctx, chatID, arg)
 
 	case "/export":
 		return h.handleExportCmd(ctx, chatID)
@@ -279,86 +355,26 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 	}
 
 	cr := h.runnerForChat(ctx, chatID)
+	ctx = tool.WithChatID(ctx, chatID)
 
 	if h.bot != nil {
 		sw := telegram.NewStreamWriterWithContext(ctx, h.bot, chatID)
 		defer sw.Cancel()
 		ctx = agent.WithStreamWriter(ctx, sw)
 		ctx = agent.WithToolHook(ctx, sw.OnTool)
-		reply, err = cr.Run(ctx, chatID, text)
+		reply, err = cr.Run(ctx, sessID, text)
+		if err == nil && strings.TrimSpace(reply) != "" {
+			reply += h.updateFooter()
+		}
 		if err == nil && sw.Finalize(ctx, reply) {
 			return "", nil
 		}
 		return reply, err
 	}
 
-	return cr.Run(ctx, chatID, text)
-}
-
-func (h *telegramHandler) switchChatModel(ctx context.Context, chatID int64, arg string) (string, error) {
-	cr := h.runnerForChat(ctx, chatID)
-	if h.cfg != nil && len(h.cfg.Providers) > 0 {
-		pcfg, model, err := config.Resolve(arg, h.cfg)
-		if err != nil {
-			return "", fmt.Errorf("gagal memilih model %q: %w", arg, err)
-		}
-		prov, err := buildProvider(pcfg)
-		if err != nil {
-			return "", fmt.Errorf("gagal inisialisasi provider untuk %q: %w", arg, err)
-		}
-		mc := pcfg.ModelConfig(model)
-		cr.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
-		cr.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
-		_ = h.store.SetChatModel(ctx, chatID, arg)
-		if arg != model {
-			return fmt.Sprintf("Model aktif diganti ke: %s (%s)", model, arg), nil
-		}
-		return fmt.Sprintf("Model aktif diganti ke: %s", model), nil
+	reply, err = cr.Run(ctx, sessID, text)
+	if err == nil && strings.TrimSpace(reply) != "" {
+		reply += h.updateFooter()
 	}
-	cr.SetModel(nil, arg, 0, 0, 0, 0)
-	_ = h.store.SetChatModel(ctx, chatID, arg)
-	return fmt.Sprintf("Model aktif diganti ke: %s", arg), nil
-}
-
-func (h *telegramHandler) handleModelCmd(ctx context.Context, chatID int64, arg string) (string, error) {
-	cr := h.runnerForChat(ctx, chatID)
-	if arg == "" {
-		var b strings.Builder
-		fmt.Fprintf(&b, "Model aktif saat ini: %s\n", cr.GetModel())
-		if h.cfg != nil && len(h.cfg.Providers) > 0 {
-			b.WriteString("\nProvider & model terkonfigurasi:\n")
-			pnames := make([]string, 0, len(h.cfg.Providers))
-			for n := range h.cfg.Providers {
-				pnames = append(pnames, n)
-			}
-			sort.Strings(pnames)
-			for _, pn := range pnames {
-				pc := h.cfg.Providers[pn]
-				fmt.Fprintf(&b, "- %s (%s): default=%s", pn, pc.Kind, pc.DefaultModel)
-				if len(pc.Models) > 0 {
-					mnames := make([]string, 0, len(pc.Models))
-					for mn := range pc.Models {
-						mnames = append(mnames, mn)
-					}
-					sort.Strings(mnames)
-					fmt.Fprintf(&b, " [%s]", strings.Join(mnames, ", "))
-				}
-				b.WriteString("\n")
-			}
-		}
-		if h.cfg != nil && len(h.cfg.Aliases) > 0 {
-			b.WriteString("\nAlias:\n")
-			anames := make([]string, 0, len(h.cfg.Aliases))
-			for a := range h.cfg.Aliases {
-				anames = append(anames, a)
-			}
-			sort.Strings(anames)
-			for _, a := range anames {
-				fmt.Fprintf(&b, "- %s -> %s\n", a, h.cfg.Aliases[a])
-			}
-		}
-		b.WriteString("\nGunakan `/model <nama>` atau `/model <provider>:<model>` untuk mengganti model.")
-		return strings.TrimRight(b.String(), "\n"), nil
-	}
-	return h.switchChatModel(ctx, chatID, arg)
+	return reply, err
 }

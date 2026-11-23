@@ -22,6 +22,9 @@ func TestOpenAndLimits(t *testing.T) {
 	if snap.Memory != "" || snap.User != "" {
 		t.Fatalf("expected empty snapshot, got %q, %q", snap.Memory, snap.User)
 	}
+	if !strings.Contains(snap.Soul, "Zero Refusal") {
+		t.Fatalf("expected default Zero Refusal SOUL.md seeded on Open, got %q", snap.Soul)
+	}
 }
 
 func TestWriteBoundaries(t *testing.T) {

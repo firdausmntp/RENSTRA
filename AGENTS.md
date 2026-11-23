@@ -184,9 +184,15 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.2.6)
+## 7. Status Rilis & Pengembangan (v1.2.7)
 
-Fitur v1.2.6 telah diimplementasikan:
+Fitur v1.2.7 telah diimplementasikan:
+1. **Dukungan Group, Supergroup & Forum Topics Relevan (`/group`):** Menghapus pembatasan `"DM saya langsung"`, mendukung otorisasi grup (`allowed_users`/`allowed_chats` & `From.ID`), filter `allowed_topics`, mode pemicu `group_mode` (`always`/`mention`), menu in-chat `/group` (termasuk `createForumTopic` & `editForumTopic`), injeksi konteks `[Grup | Topik | Pengirim]`, serta isolasi sesi & eksekusi turn paralel antar-topik (`SessionChatID` & `lockScope`).
+2. **Core Telegram Bot API 10.5:** Implementasi `BotFullInfo` pada `GetMe`, `SetMySettings` (`setMySettings` untuk konfigurasi grup, privasi, topik, `has_topic_sidebar`, dan `callback_query_mode`), `WriteAccessAllowed.Inviter`, `CallbackQuery.InlineMessageID`, serta `RichBlockExpandableQuote` berbasis `blocks`.
+3. **Default System `SOUL.md` (Zero Refusal & Action-First), Per-Topic `/persona`, Fleksibilitas `/memory` & `/undo`:** Berkas sistem `$RENSTRA_HOME/memory/SOUL.md` otomatis terisi `DefaultSoul` (`ZERO REFUSAL` & langsung eksekusi tool tanpa menolak/menunda) lengkap dengan `/soul`, `/persona` terisolasi per topik/grup, `/memory set|user|soul|here|del|limit` & `/remember user:|soul:|here:`, `/undo` checkpoint rollback, serta perbaikan approval grup (`cid != 0`).
+4. **Manajemen Multi-Akun (`/account` & `renstra account`), `/model add|rm`, `/context`, Migrasi Penuh Hermes & Footer Update Versi:** Kelola banyak akun provider & API key `.env` secara live (`/account`), tambah/hapus model langsung (`/model add <name> <prov> [ctx]` & `/model rm`), auto-deteksi & auto-scaling context window (`128k`/`200k`/`1M` + `/context`), migrasi penuh `.env` + multi-provider dari Hermes (`renstra migrate hermes`), format CLI helper standar (`Usage:`, `Commands:`, `Flags:`, `Environment:`, `Examples:`), serta footer otomatis saat ada update versi baru di CLI dan pesan Telegram.
+
+Fitur v1.2.6 sebelumnya:
 1. **Perbaikan SSE Streaming & Empty Response Guard:** Melewati `data:` keepalive kosong, buffering payload SSE multi-baris di provider OpenAI/Anthropic/Google, fallback JSON non-SSE pada HTTP 200, dan validasi respons kosong di `Runner`.
 2. **Dukungan Sub-Message, Reply, Quote & Thread Telegram:** Context injection untuk `reply_to_message` & `quote` (termasuk lampiran media) serta pengiriman balik `message_thread_id` dan `reply_parameters` across text, rich messages, media, keyboard, dan approval.
 3. **Fitur Baru (`/remember`, `/export`, Menu `/memory`, `/fallback`, Markdown Heading, CLI & Navigasi):** Penyimpanan cepat ke `MEMORY.md`/`USER.md`, export transkrip sesi ke `.md`, menu `/memory` & `/fallback` (Smart Fallback dengan circuit-breaker, context/vision routing, dan auto-discovery), heading `#` menjadi `<b>`, `renstra model set`, aktivasi VT ANSI Windows, serta tombol `⬅️ Menu` di seluruh submenu Telegram.

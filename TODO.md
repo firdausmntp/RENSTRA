@@ -4,6 +4,24 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.2.7 (Telegram Group & Forum Topics, Core Telegram Bot API 10.5, Connection Pooling & Isolasi Topik)
+
+- [x] **Dukungan Penuh Group, Supergroup & Forum Topics (Tanpa Tolakan `"DM saya langsung"`)**
+  - **Lokasi:** [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/telegram/group.go`](internal/telegram/group.go), [`internal/telegram/reply.go`](internal/telegram/reply.go), [`cmd/renstra/telegram_handler.go`](cmd/renstra/telegram_handler.go)
+  - **Fitur:** Mendukung chat `group` dan `supergroup` (otorisasi via ID grup di `allowed_users`/`allowed_chats` maupun ID pengirim `From.ID`), filter topik relevan (`allowed_topics`), mode pemicu grup (`group_mode: always|mention` untuk `@bot_username` / reply ke bot / slash command), pelacakan nama topik otomatis (`forum_topic_created` / `forum_topic_edited`), injeksi konteks `[Grup | Topik | Pengirim]`, serta isolasi histori SQLite & lock turn paralel per topik (`SessionChatID` & `lockScope`).
+- [x] **Pembaruan Core Telegram Bot API 10.5 (`getMe` `BotFullInfo`, `setMySettings`, `WriteAccessAllowed.Inviter`, Expandable Quote `blocks`)**
+  - **Lokasi:** [`internal/telegram/bot105.go`](internal/telegram/bot105.go), [`internal/telegram/types.go`](internal/telegram/types.go), [`internal/telegram/rich.go`](internal/telegram/rich.go), [`internal/config/config.go`](internal/config/config.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go)
+  - **Fitur:** Struktur `BotFullInfo` (`active_usernames`, `inline_query_placeholder`, `needs_inline_query_location`, `has_topic_sidebar`), method `SetMySettings` (`can_join_groups`, `can_read_all_group_messages`, `has_topics_enabled`, `has_topic_sidebar`, `callback_query_mode`), pelacakan `WriteAccessAllowed.Inviter`, dan blok `RichBlockExpandableQuote` berbasis `blocks`.
+- [x] **Optimasi Performa & Penanganan Turn Grup/Topik**
+  - **Lokasi:** [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/provider/openai/client.go`](internal/provider/openai/client.go), [`internal/provider/anthropic/client.go`](internal/provider/anthropic/client.go), [`internal/provider/google/client.go`](internal/provider/google/client.go), [`internal/agent/runner.go`](internal/agent/runner.go)
+  - **Peningkatan:** Tuning HTTP connection pool (`MaxIdleConns: 32`, `MaxIdleConnsPerHost: 16`, `IdleConnTimeout: 90s`) di Telegram client dan adapter provider untuk menurunkan latensi TLS, serta pencatatan turn SQLite untuk ID grup negatif (`chatID != 0`).
+
+- [x] **Default System `SOUL.md` (`ZERO REFUSAL` & Action-First), Perbaikan Approval Grup & Auto-Deteksi Context Window**
+  - **Lokasi:** [`internal/memory/memory.go`](internal/memory/memory.go), [`internal/agent/prompt.go`](internal/agent/prompt.go), [`internal/tool/agent_tools.go`](internal/tool/agent_tools.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go), [`internal/config/resolve.go`](internal/config/resolve.go), [`cmd/renstra/telegram_config.go`](cmd/renstra/telegram_config.go)
+  - **Fitur & Perbaikan:** Menambahkan berkas sistem bawaan `$RENSTRA_HOME/memory/SOUL.md` (`DefaultSoul` dengan prinsip **Zero Refusal & Action-First**) yang selalu di-inject di awal system prompt (serta perintah `/soul [reset|<teks>]` & `target=soul` di tool `memory`), isolasi `/persona [reset|<teks>]`, `/model`, dan `/config` per topik forum & per grup (`SessionChatID`), memperbaiki bug `cid <= 0` di `serve.go` yang menolak eksekusi tool pada chat grup (`cid < 0`), menghapus instruksi ragu-ragu di prompt, perintah `/model add <nama> <provider> <context>` & `/model rm` (di Telegram, CLI REPL & `renstra model add`), menu kontrol grup & topik in-chat `/group`, perintah `/context <ukuran>` + auto-scale `ContextWindow` dari usage provider, auto-deteksi ukuran context window model (`128k` / `200k` / `1M`), manajemen memori fleksibel (`/memory set|user|soul|here|del|limit` & `/remember user:|soul:|here:`), `/undo` checkpoint rollback, serta manajemen multi-akun (`/account` & `renstra account`) + migrasi penuh `.env` & multi-provider dari Hermes (`renstra migrate hermes`).
+
+---
+
 ## Rilis v1.2.6 (Fix Streaming JSON Chunk, Reply/Sub-Message Telegram, `/memory`, `/remember`, `/export`)
 
 - [x] **Perbaikan Error Streaming `chunk tidak valid: unexpected end of JSON input`**

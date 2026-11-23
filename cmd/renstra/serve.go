@@ -36,7 +36,8 @@ func serveCmd() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	token := cfg.Telegram.Token
-	allowedUsers := cfg.Telegram.AllowedUsers
+	allowedUsers := append([]int64(nil), cfg.Telegram.AllowedUsers...)
+	allowedUsers = append(allowedUsers, cfg.Telegram.AllowedChats...)
 
 	if token == "" {
 		return fmt.Errorf("telegram.token belum diset di %s; jalankan `renstra setup`", cfgPath)
@@ -68,10 +69,12 @@ func serveCmd() error {
 	var handler *telegramHandler
 	errLog := newErrorLogRecorder(home, version)
 	bot, err := telegram.New(telegram.Config{
-		Token:        token,
-		AllowedUsers: allowedUsers,
-		PollTimeout:  pollTimeout,
-		WorkspaceDir: workspace,
+		Token:         token,
+		AllowedUsers:  allowedUsers,
+		AllowedTopics: cfg.Telegram.AllowedTopics,
+		GroupMode:     cfg.Telegram.GroupMode,
+		PollTimeout:   pollTimeout,
+		WorkspaceDir:  workspace,
 		OnSeen: func(id int64) {
 			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer scancel()
@@ -220,7 +223,7 @@ func serveCmd() error {
 	}
 	runner.Approve = func(actx context.Context, name string, args json.RawMessage) (bool, error) {
 		cid := tool.ChatIDFrom(actx)
-		if cid <= 0 {
+		if cid == 0 {
 			return false, nil
 		}
 		return handler.Approve(actx, cid, name, string(args))
@@ -234,10 +237,39 @@ func serveCmd() error {
 	if err := bot.SetMyCommands(ctx, telegram.DefaultCommands()); err != nil {
 		logger.Warn("telegram_set_my_commands_failed", "error", err.Error())
 	}
+	if info, err := bot.GetMe(ctx); err == nil && info != nil {
+		logger.Info("telegram_bot_ready", "username", info.Username, "can_join_groups", info.CanJoinGroups, "has_topic_sidebar", info.HasTopicSidebar)
+	}
+	if err := bot.SetMySettings(ctx, telegram.BotSettings{
+		CanJoinGroups:           cfg.Telegram.CanJoinGroups,
+		CanReadAllGroupMessages: cfg.Telegram.CanReadAllGroupMessages,
+		HasTopicsEnabled:        cfg.Telegram.HasTopicsEnabled,
+		HasTopicSidebar:         cfg.Telegram.HasTopicSidebar,
+		CallbackQueryMode:       cfg.Telegram.CallbackQueryMode,
+	}); err != nil {
+		logger.Warn("telegram_set_my_settings_failed", "error", err.Error())
+	}
 
+	if rel, isNewer := update.PeekCachedUpdate(home, version); isNewer && rel != nil {
+		handler.SetLatestVersion(rel.TagName)
+	}
 	go func() {
-		if rel, isNewer := update.CheckCachedUpdate(home, version, 12*time.Hour); isNewer && rel != nil {
-			logger.Info("renstra_update_available", "current", version, "latest", rel.TagName, "url", rel.HTMLURL)
+		check := func() {
+			if rel, isNewer := update.CheckCachedUpdate(home, version, 6*time.Hour); isNewer && rel != nil {
+				handler.SetLatestVersion(rel.TagName)
+				logger.Info("renstra_update_available", "current", version, "latest", rel.TagName, "url", rel.HTMLURL)
+			}
+		}
+		check()
+		t := time.NewTicker(6 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				check()
+			}
 		}
 	}()
 

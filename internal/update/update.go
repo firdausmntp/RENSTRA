@@ -131,6 +131,26 @@ func FetchLatestRelease(ctx context.Context, repo, currentVersion string) (*Rele
 	return &rel, nil
 }
 
+// PeekCachedUpdate reads the local update_check.json cache without performing
+// any network request, returning the cached release if it is newer than currentVersion.
+func PeekCachedUpdate(homeDir, currentVersion string) (*ReleaseInfo, bool) {
+	if homeDir == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(filepath.Join(homeDir, cacheFileName))
+	if err != nil {
+		return nil, false
+	}
+	var cc cachedCheck
+	if json.Unmarshal(data, &cc) != nil || cc.Release == nil {
+		return nil, false
+	}
+	if IsNewer(cc.Release.TagName, currentVersion) {
+		return cc.Release, true
+	}
+	return cc.Release, false
+}
+
 // CheckCachedUpdate checks if a new version exists, utilizing a local cache
 // file inside homeDir to prevent GitHub API rate limiting.
 func CheckCachedUpdate(homeDir, currentVersion string, ttl time.Duration) (*ReleaseInfo, bool) {

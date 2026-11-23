@@ -21,7 +21,7 @@ import (
 
 func modelCmd(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("pemakaian: renstra model <list|set <model|provider:model|alias>>")
+		return fmt.Errorf("pemakaian: renstra model <list|set <ref>|add <nama> [provider] [context]>")
 	}
 	switch args[0] {
 	case "list":
@@ -32,10 +32,55 @@ func modelCmd(args []string) error {
 			return fmt.Errorf("pemakaian: renstra model set <model|provider:model|alias>")
 		}
 		return modelSetCmd(args[1])
+	case "add":
+		return modelAddCmd(args[1:])
+	case "rm", "remove", "delete":
+		if len(args) < 2 {
+			return fmt.Errorf("pemakaian: renstra model rm <nama_model|alias|provider:model>")
+		}
+		return modelRmCmd(args[1])
 	default:
 		// Allow shorthand: `renstra model <ref>`
 		return modelSetCmd(args[0])
 	}
+}
+
+func modelAddCmd(args []string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	spec, err := config.ParseAddModelArgs(args, cfg)
+	if err != nil {
+		return err
+	}
+	if _, err := config.AddModel(spec, cfg); err != nil {
+		return err
+	}
+	ref := spec.Provider + ":" + spec.Model
+	out := cli.Writer(os.Stdout)
+	fmt.Fprintf(out, "%s✅ Model ditambahkan:%s %s%s%s (context=%s%d%s, max_output=%s%d%s, vision=%v)\n",
+		cli.ColorGreen, cli.ColorReset,
+		cli.ColorCyan, ref, cli.ColorReset,
+		cli.ColorYellow, spec.Context, cli.ColorReset,
+		cli.ColorYellow, spec.MaxOutput, cli.ColorReset,
+		spec.Vision)
+	return nil
+}
+
+func modelRmCmd(ref string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	_, removed, err := config.RemoveModel(ref, cfg)
+	if err != nil {
+		return err
+	}
+	out := cli.Writer(os.Stdout)
+	fmt.Fprintf(out, "%s🗑️ Model/alias dihapus:%s %s%s%s\n",
+		cli.ColorGreen, cli.ColorReset, cli.ColorYellow, removed, cli.ColorReset)
+	return nil
 }
 
 func modelSetCmd(ref string) error {

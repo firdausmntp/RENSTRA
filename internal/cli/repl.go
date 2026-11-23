@@ -54,7 +54,7 @@ func RunWithOptions(ctx context.Context, r *agent.Runner, chatID int64, in io.Re
 				if line == "/exit" || line == "/quit" {
 					return nil
 				}
-			} else if !runTurn(ctx, r, chatID, line, sigCh, out, interactive) {
+			} else if !runTurn(ctx, r, chatID, line, sigCh, out, interactive, opts.UpdateInfo) {
 				return nil
 			}
 		}
@@ -67,7 +67,7 @@ func RunWithOptions(ctx context.Context, r *agent.Runner, chatID int64, in io.Re
 	}
 }
 
-func runTurn(ctx context.Context, r *agent.Runner, chatID int64, line string, sigCh <-chan os.Signal, out io.Writer, interactive bool) bool {
+func runTurn(ctx context.Context, r *agent.Runner, chatID int64, line string, sigCh <-chan os.Signal, out io.Writer, interactive bool, updateInfo string) bool {
 	turnCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -112,7 +112,11 @@ func runTurn(ctx context.Context, r *agent.Runner, chatID int64, line string, si
 					fmt.Fprintf(out, "%s\n\n", summary)
 				}
 			default:
-				fmt.Fprintf(out, "%s╰─%s %s\n\n", cBrightMagenta, cReset, summary)
+				fmt.Fprintf(out, "%s╰─%s %s\n", cBrightMagenta, cReset, summary)
+				if strings.TrimSpace(updateInfo) != "" {
+					fmt.Fprintf(out, "   %s💡 %s%s\n", cYellow, strings.TrimSpace(updateInfo), cReset)
+				}
+				fmt.Fprintln(out)
 			}
 			return true
 		case <-sigCh:

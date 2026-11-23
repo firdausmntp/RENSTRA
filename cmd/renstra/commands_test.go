@@ -13,6 +13,7 @@ import (
 	"renstra/internal/provider"
 	"renstra/internal/skill"
 	"renstra/internal/store"
+	"renstra/internal/telegram"
 )
 
 // newTestStore opens a throwaway SQLite store.
@@ -322,5 +323,68 @@ func TestSlashModelWithConfigResolvesProviderAndAlias(t *testing.T) {
 	saved, err := st.GetChatModel(context.Background(), 24)
 	if err != nil || saved != "sonnet" {
 		t.Fatalf("model per chat tidak tersimpan di DB: got=%q err=%v", saved, err)
+	}
+}
+
+func TestSlashModelAddGroupAndContextCommands(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", dir)
+	st := newTestStore(t)
+	cfg := &config.Config{
+		DefaultModel: "utama:gpt-4o-mini",
+		Providers: map[string]config.ProviderConfig{
+			"utama": {Kind: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "k", DefaultModel: "gpt-4o-mini"},
+		},
+	}
+	r := &agent.Runner{Store: st, Model: "gpt-4o-mini", ContextWindow: 128000}
+	h := &telegramHandler{store: st, runner: r, cfg: cfg}
+	ctx := context.Background()
+
+	// /model add <name> <provider> <context>
+	addOut, err := h.Handle(ctx, 55, "/model add gpt-4.1-mini utama 256k 8192 vision alias=fast41")
+	if err != nil || !strings.Contains(addOut, "256000") || !strings.Contains(addOut, "fast41") {
+		t.Fatalf("/model add failed: out=%q err=%v", addOut, err)
+	}
+	if got := h.runnerForChat(ctx, 55).ContextWindow; got != 256000 {
+		t.Fatalf("expected active chat context 256000 after /model add, got %d", got)
+	}
+
+	// /context <size>
+	ctxOut, err := h.Handle(ctx, 55, "/context 512k")
+	if err != nil || h.runnerForChat(ctx, 55).ContextWindow != 512000 {
+		t.Fatalf("/context 512k failed: out=%q err=%v win=%d", ctxOut, err, h.runnerForChat(ctx, 55).ContextWindow)
+	}
+
+	// /group mention
+	grpOut, err := h.Handle(ctx, 55, "/group mention")
+	if err != nil || !strings.Contains(grpOut, "mention") || h.cfg.Telegram.GroupMode != "mention" {
+		t.Fatalf("/group mention failed: out=%q err=%v", grpOut, err)
+	}
+
+	// Per-topic & per-group isolated /persona in the same supergroup (-100777)
+	ctxTopic10 := telegram.WithTopic(ctx, 10)
+	ctxTopic20 := telegram.WithTopic(ctx, 20)
+	if _, err := h.Handle(ctxTopic10, -100777, "/persona Kamu adalah Senior DevOps Architect"); err != nil {
+		t.Fatalf("/persona topic 10: %v", err)
+	}
+	if _, err := h.Handle(ctxTopic20, -100777, "/persona Kamu adalah Pentester & Red Teamer"); err != nil {
+		t.Fatalf("/persona topic 20: %v", err)
+	}
+	p10 := h.runnerForChat(ctxTopic10, -100777).PromptPrefix
+	p20 := h.runnerForChat(ctxTopic20, -100777).PromptPrefix
+	if p10 != "Kamu adalah Senior DevOps Architect" || p20 != "Kamu adalah Pentester & Red Teamer" {
+		t.Fatalf("persona leaked across topics: p10=%q p20=%q", p10, p20)
+	}
+
+	// Per-topic memory (/remember here:) & /model rm
+	if _, err := h.Handle(ctxTopic10, -100777, "/remember here: cluster k8s di us-east-1"); err != nil {
+		t.Fatalf("/remember here: %v", err)
+	}
+	if !strings.Contains(h.runnerForChat(ctxTopic10, -100777).PromptPrefix, "cluster k8s di us-east-1") ||
+		strings.Contains(h.runnerForChat(ctxTopic20, -100777).PromptPrefix, "cluster k8s di us-east-1") {
+		t.Fatalf("topic memory not isolated: p10=%q p20=%q", h.runnerForChat(ctxTopic10, -100777).PromptPrefix, h.runnerForChat(ctxTopic20, -100777).PromptPrefix)
+	}
+	if rmOut, err := h.Handle(ctx, 55, "/model rm fast41"); err != nil || !strings.Contains(rmOut, "fast41") {
+		t.Fatalf("/model rm failed: out=%q err=%v", rmOut, err)
 	}
 }

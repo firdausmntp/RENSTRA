@@ -206,6 +206,13 @@ func (r *Runner) SetMaxIters(n int) {
 	r.mu.Unlock()
 }
 
+// SetContextWindow updates ContextWindow safely at runtime.
+func (r *Runner) SetContextWindow(n int) {
+	r.mu.Lock()
+	r.ContextWindow = n
+	r.mu.Unlock()
+}
+
 // SetTurnTimeout updates TurnTimeout safely at runtime.
 func (r *Runner) SetTurnTimeout(d time.Duration) {
 	r.mu.Lock()

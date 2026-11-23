@@ -20,9 +20,12 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.2.6"
+var version = "v1.2.7"
 
 func main() {
+	if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {
+		cli.SetUpdateNotice(fmt.Sprintf("Versi baru tersedia: %s (kamu: %s). Jalankan `renstra update` untuk memperbarui.", rel.TagName, version))
+	}
 	args := os.Args[1:]
 	if len(args) == 0 {
 		usage()
@@ -59,6 +62,12 @@ func main() {
 			os.Exit(2)
 		}
 		return
+	case "account", "accounts":
+		if err := accountCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
+		}
+		return
 	case "skill":
 		if err := skillCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
@@ -86,6 +95,9 @@ func main() {
 	case "version", "-v", "--version":
 		out := cli.Writer(os.Stdout)
 		fmt.Fprintf(out, "%s⚡ renstra%s %s%s%s\n", cli.ColorCyan, cli.ColorReset, cli.ColorGreen, version, cli.ColorReset)
+		if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {
+			fmt.Fprintf(out, "%s💡 Versi baru tersedia: %s (kamu: %s). Jalankan `renstra update` untuk memperbarui.%s\n", cli.ColorYellow, rel.TagName, version, cli.ColorReset)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "perintah tidak dikenal: %s\n\n", args[0])
 		cli.PrintCLIUsage(os.Stderr, detectLang(args[1:]), version)
@@ -247,6 +259,7 @@ func chatCmd(args []string) error {
 	var updateMsg string
 	if rel, isNewer := update.CheckCachedUpdate(home, version, 12*time.Hour); isNewer && rel != nil {
 		updateMsg = fmt.Sprintf("Versi baru tersedia: %s (kamu: %s). Jalankan `renstra update` untuk memperbarui.", rel.TagName, version)
+		cli.SetUpdateNotice(updateMsg)
 	}
 
 	provKind := pcfg.Kind
@@ -263,13 +276,39 @@ func chatCmd(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	return cli.RunWithOptions(ctx, r, 1, os.Stdin, os.Stdout, cli.RunOptions{
-		Version:   version,
-		Provider:  provKind,
-		ModelList: func() string { return modelListText(cfg) },
+		Version:    version,
+		Provider:   provKind,
+		UpdateInfo: updateMsg,
+		ModelList:  func() string { return modelListText(cfg) },
 		BindApprover: func(rd *bufio.Reader) {
 			r.Approve = cli.ApproverFrom(rd, os.Stdout)
 		},
 		SwitchModel: func(ref string) (string, error) {
+			trimmed := strings.TrimSpace(ref)
+			if strings.EqualFold(trimmed, "add") || strings.HasPrefix(strings.ToLower(trimmed), "add ") {
+				fields := strings.Fields(strings.TrimSpace(trimmed[len("add"):]))
+				spec, err := config.ParseAddModelArgs(fields, cfg)
+				if err != nil {
+					return "", err
+				}
+				updatedCfg, err := config.AddModel(spec, cfg)
+				if err != nil {
+					return "", err
+				}
+				cfg = updatedCfg
+				ref = spec.Provider + ":" + spec.Model
+			}
+			for _, prefix := range []string{"rm ", "remove ", "delete ", "del "} {
+				if strings.HasPrefix(strings.ToLower(trimmed), prefix) {
+					target := strings.TrimSpace(trimmed[len(prefix):])
+					updatedCfg, removed, err := config.RemoveModel(target, cfg)
+					if err != nil {
+						return "", err
+					}
+					cfg = updatedCfg
+					return fmt.Sprintf("🗑️ Model/alias dihapus: %s", removed), nil
+				}
+			}
 			nextPCfg, nextModel, err := config.Resolve(ref, cfg)
 			if err != nil {
 				return "", err

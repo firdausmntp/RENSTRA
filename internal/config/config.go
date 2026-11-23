@@ -41,9 +41,17 @@ type ApprovalConfig struct {
 }
 
 type TelegramConfig struct {
-	Token        string   `yaml:"token"`
-	AllowedUsers []int64  `yaml:"allowed_users"`
-	PollTimeout  Duration `yaml:"poll_timeout"` // default 30s
+	Token                   string   `yaml:"token"`
+	AllowedUsers            []int64  `yaml:"allowed_users"`
+	AllowedChats            []int64  `yaml:"allowed_chats"`
+	AllowedTopics           []int64  `yaml:"allowed_topics"`
+	GroupMode               string   `yaml:"group_mode"` // "always" (default) or "mention"
+	PollTimeout             Duration `yaml:"poll_timeout"` // default 30s
+	CanJoinGroups           *bool    `yaml:"can_join_groups"`
+	CanReadAllGroupMessages *bool    `yaml:"can_read_all_group_messages"`
+	HasTopicsEnabled        *bool    `yaml:"has_topics_enabled"`
+	HasTopicSidebar         *bool    `yaml:"has_topic_sidebar"`
+	CallbackQueryMode       string   `yaml:"callback_query_mode"`
 }
 
 type ToolsConfig struct {
@@ -283,14 +291,19 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// ModelConfig returns the capability table entry, with safe defaults filled in.
+// ModelConfig returns the capability table entry, with smart defaults inferred
+// from known model families when not explicitly configured in config.yaml.
 func (p ProviderConfig) ModelConfig(model string) ModelConfig {
+	def := DefaultModelConfig(model)
 	m, ok := p.Models[model]
 	if !ok {
-		m = ModelConfig{Context: 32000}
+		return def
 	}
 	if m.Context == 0 {
-		m.Context = 32000
+		m.Context = def.Context
+	}
+	if m.MaxOutput == 0 {
+		m.MaxOutput = def.MaxOutput
 	}
 	return m
 }

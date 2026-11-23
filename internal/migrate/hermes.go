@@ -36,6 +36,8 @@ type Report struct {
 	MCPServers      int
 	MemoryCopied    bool
 	UserCopied      bool
+	SoulCopied      bool
+	EnvCopied       bool
 	SkillsCopied    int
 	SkillsSkipped   int
 	SessionsCopied  int
@@ -94,6 +96,11 @@ func FromHermes(ctx context.Context, opts Options) (*Report, error) {
 		}
 	}
 	sort.Strings(rep.EnvVarsFound)
+	if len(dotEnv) > 0 {
+		if err := migrateDotEnv(dotEnv, opts, rep); err != nil {
+			return rep, err
+		}
+	}
 
 	if err := migrateMemory(src, opts, rep); err != nil {
 		return rep, err
@@ -114,7 +121,8 @@ func FromHermes(ctx context.Context, opts Options) (*Report, error) {
 func migrateMemory(src string, opts Options, rep *Report) error {
 	memSrc := firstExisting(filepath.Join(src, "memories", "MEMORY.md"), filepath.Join(src, "MEMORY.md"))
 	userSrc := firstExisting(filepath.Join(src, "memories", "USER.md"), filepath.Join(src, "USER.md"))
-	if memSrc == "" && userSrc == "" {
+	soulSrc := firstExisting(filepath.Join(src, "memories", "SOUL.md"), filepath.Join(src, "SOUL.md"))
+	if memSrc == "" && userSrc == "" && soulSrc == "" {
 		return nil
 	}
 
@@ -146,9 +154,13 @@ func migrateMemory(src string, opts Options, rep *Report) error {
 		}
 
 		dstPath := filepath.Join(opts.ToDir, "memory", label)
-		if existing, err := os.ReadFile(dstPath); err == nil && strings.TrimSpace(string(existing)) != "" && !opts.Force {
-			rep.SkippedItems = append(rep.SkippedItems, fmt.Sprintf("memory/%s sudah terisi (pakai --force untuk menimpa)", label))
-			return false, nil
+		if existing, err := os.ReadFile(dstPath); err == nil {
+			exStr := strings.TrimSpace(string(existing))
+			isDefaultSoul := kind == memory.KindSoul && exStr == strings.TrimSpace(memory.DefaultSoul)
+			if exStr != "" && !isDefaultSoul && !opts.Force {
+				rep.SkippedItems = append(rep.SkippedItems, fmt.Sprintf("memory/%s sudah terisi (pakai --force untuk menimpa)", label))
+				return false, nil
+			}
 		}
 		if opts.DryRun {
 			return true, nil
@@ -165,7 +177,46 @@ func migrateMemory(src string, opts Options, rep *Report) error {
 		return err
 	}
 	rep.UserCopied, err = copyOne(userSrc, memory.KindUser, memory.UserLimit, "USER.md")
+	if err != nil {
+		return err
+	}
+	rep.SoulCopied, err = copyOne(soulSrc, memory.KindSoul, memory.SoulLimit, "SOUL.md")
 	return err
+}
+
+func migrateDotEnv(dotEnv map[string]string, opts Options, rep *Report) error {
+	dstPath := filepath.Join(opts.ToDir, ".env")
+	existing := parseDotEnv(dstPath)
+	keys := make([]string, 0, len(dotEnv))
+	for k := range dotEnv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	changed := false
+	for _, k := range keys {
+		if existing[k] != "" && !opts.Force {
+			continue
+		}
+		existing[k] = dotEnv[k]
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	rep.EnvCopied = true
+	if opts.DryRun {
+		return nil
+	}
+	allKeys := make([]string, 0, len(existing))
+	for k := range existing {
+		allKeys = append(allKeys, k)
+	}
+	sort.Strings(allKeys)
+	var b strings.Builder
+	for _, k := range allKeys {
+		fmt.Fprintf(&b, "%s=%q\n", k, existing[k])
+	}
+	return os.WriteFile(dstPath, []byte(b.String()), 0o600)
 }
 
 func migrateSkills(src string, opts Options, rep *Report) error {

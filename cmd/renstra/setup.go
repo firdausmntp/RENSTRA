@@ -66,12 +66,18 @@ func setupCmd() error {
 	b.WriteString("    # proxy: \"http://127.0.0.1:8080\"\n")
 	b.WriteString("    # headers:\n")
 	b.WriteString("    #   X-Custom-Header: value\n")
-	b.WriteString("    # models:\n")
-	b.WriteString("    #   " + defaultModel + ":\n")
-	b.WriteString("    #     context: 128000\n")
-	b.WriteString("    #     max_output: 4096\n")
-	b.WriteString("    #     price_in: 0.15\n")
-	b.WriteString("    #     price_out: 0.60\n\n")
+	mc := config.DefaultModelConfig(defaultModel)
+	b.WriteString("    models:\n")
+	fmt.Fprintf(&b, "      %s:\n", yamlQuote(defaultModel))
+	fmt.Fprintf(&b, "        context: %d\n", mc.Context)
+	if mc.MaxOutput > 0 {
+		fmt.Fprintf(&b, "        max_output: %d\n", mc.MaxOutput)
+	}
+	if mc.Vision {
+		b.WriteString("        vision: true\n")
+	}
+	b.WriteString("        # price_in: 0.15\n")
+	b.WriteString("        # price_out: 0.60\n\n")
 
 	b.WriteString("aliases: {}\n\n")
 

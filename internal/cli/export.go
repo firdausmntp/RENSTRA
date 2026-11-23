@@ -6,11 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"renstra/internal/agent"
+	"renstra/internal/config"
 	"renstra/internal/memory"
+	"renstra/internal/tool"
 )
 
 func handleRememberCLI(r *agent.Runner, arg string, out io.Writer) {
@@ -170,5 +173,225 @@ func handleLogsCLI(r *agent.Runner, arg string, out io.Writer) {
 	fmt.Fprintf(out, "%s╭─ Log error terbaru (%s)%s\n", cCyan, errFile, cReset)
 	for _, l := range lines {
 		fmt.Fprintf(out, "  %s\n", l)
+	}
+}
+
+func handleSoulCLI(r *agent.Runner, arg string, out io.Writer) {
+	if r.Memory == nil {
+		fmt.Fprintln(out, strings.TrimSpace(memory.DefaultSoul))
+		return
+	}
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		snap := r.Memory.Snapshot()
+		fmt.Fprintf(out, "%s╭─ SOUL.md (%d/%d)%s\n%s\n",
+			cCyan, len([]rune(snap.Soul)), memory.SoulLimit, cReset, strings.TrimSpace(snap.Soul))
+		return
+	}
+	if strings.EqualFold(trimmed, "reset") || strings.EqualFold(trimmed, "default") {
+		if err := r.Memory.ResetSoul(); err != nil {
+			fmt.Fprintf(out, "%s✖ gagal reset SOUL.md: %v%s\n", cRed, err, cReset)
+			return
+		}
+		r.InvalidatePrompt()
+		fmt.Fprintf(out, "%s🔥 SOUL.md dikembalikan ke default Zero Refusal.%s\n", cGreen, cReset)
+		return
+	}
+	if err := r.Memory.Write(memory.KindSoul, trimmed); err != nil {
+		fmt.Fprintf(out, "%s✖ gagal menyimpan SOUL.md: %v%s\n", cRed, err, cReset)
+		return
+	}
+	r.InvalidatePrompt()
+	fmt.Fprintf(out, "%s🔥 SOUL.md diperbarui (%d/%d char).%s\n", cGreen, len([]rune(trimmed)), memory.SoulLimit, cReset)
+}
+
+func handleContextCLI(ctx context.Context, r *agent.Runner, chatID int64, arg string, out io.Writer) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		win := r.ContextWindow
+		if win <= 0 {
+			win = 32000
+		}
+		used := 0
+		if r.Store != nil {
+			msgs, _ := r.Store.Messages(ctx, chatID)
+			used = agent.EstimateTokens(msgs)
+		}
+		if r.Tools != nil {
+			used += agent.EstimateRequestTokens("", r.Tools.Defs(), nil)
+		}
+		pct := float64(used) / float64(win) * 100
+		fmt.Fprintf(out, "%s📏 Context Window:%s %s%d tok%s (terpakai ~%d tok / %.0f%%)\n",
+			cCyan, cReset, cGreen, win, cReset, used, pct)
+		fmt.Fprintf(out, "%sUbah: /context <ukuran> (contoh: /context 128k, /context 200k, /context 1m)%s\n", cDim, cReset)
+		return
+	}
+	n, err := config.ParseTokenCount(trimmed)
+	if err != nil || n < 4096 {
+		fmt.Fprintf(out, "%s✖ ukuran context minimal 4096 (contoh: 32k, 128k, 200k, 1m)%s\n", cRed, cReset)
+		return
+	}
+	r.SetContextWindow(n)
+	fmt.Fprintf(out, "%s✅ Context window diubah ke:%s %s%d tokens%s\n", cGreen, cReset, cCyan, n, cReset)
+}
+
+func handlePersonaCLI(r *agent.Runner, arg string, out io.Writer) {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		cur := strings.TrimSpace(r.PromptPrefix)
+		if cur == "" {
+			cur = "(default)"
+		}
+		fmt.Fprintf(out, "%s🎭 Persona aktif:%s %s\n", cCyan, cReset, cur)
+		fmt.Fprintf(out, "%sUbah: /persona <instruksi> | Reset: /persona reset%s\n", cDim, cReset)
+		return
+	}
+	if strings.EqualFold(trimmed, "reset") || strings.EqualFold(trimmed, "clear") || trimmed == "-" {
+		r.SetPromptPrefix("")
+		fmt.Fprintf(out, "%s🎭 Persona dikembalikan ke default.%s\n", cGreen, cReset)
+		return
+	}
+	r.SetPromptPrefix(trimmed)
+	fmt.Fprintf(out, "%s🎭 Persona diperbarui:%s %s\n", cGreen, cReset, trimmed)
+}
+
+func handleMemorySubCLI(r *agent.Runner, arg string, out io.Writer) {
+	if r.Memory == nil {
+		fmt.Fprintln(out, "Memory store tidak aktif.")
+		return
+	}
+	parts := strings.SplitN(strings.TrimSpace(arg), " ", 2)
+	sub := strings.ToLower(strings.TrimSpace(parts[0]))
+	rest := ""
+	if len(parts) > 1 {
+		rest = strings.TrimSpace(parts[1])
+	}
+	switch sub {
+	case "set", "write":
+		if err := r.Memory.Write(memory.KindMemory, rest); err != nil {
+			fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+			return
+		}
+		r.InvalidatePrompt()
+		fmt.Fprintf(out, "%s🧠 MEMORY.md diperbarui (%d char).%s\n", cGreen, len([]rune(rest)), cReset)
+	case "user":
+		if err := r.Memory.Write(memory.KindUser, rest); err != nil {
+			fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+			return
+		}
+		r.InvalidatePrompt()
+		fmt.Fprintf(out, "%s👤 USER.md diperbarui (%d char).%s\n", cGreen, len([]rune(rest)), cReset)
+	case "soul":
+		handleSoulCLI(r, rest, out)
+	case "del", "rm", "delete":
+		kind := memory.KindMemory
+		q := rest
+		if strings.HasPrefix(strings.ToLower(q), "user:") {
+			kind = memory.KindUser
+			q = strings.TrimSpace(q[len("user:"):])
+		}
+		removed, err := r.Memory.DeleteEntry(kind, q)
+		if err != nil {
+			fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+			return
+		}
+		r.InvalidatePrompt()
+		fmt.Fprintf(out, "%s🗑️ Catatan dihapus:%s %s\n", cGreen, cReset, removed)
+	case "limit", "limits":
+		fields := strings.Fields(rest)
+		if len(fields) > 0 {
+			mLim, _ := strconv.Atoi(fields[0])
+			uLim, sLim := 0, 0
+			if len(fields) >= 2 {
+				uLim, _ = strconv.Atoi(fields[1])
+			}
+			if len(fields) >= 3 {
+				sLim, _ = strconv.Atoi(fields[2])
+			}
+			r.Memory.SetLimits(mLim, uLim, sLim)
+		}
+		m, u, s := r.Memory.AllLimits()
+		fmt.Fprintf(out, "%s📏 Batas karakter:%s MEMORY=%d, USER=%d, SOUL=%d\n", cCyan, cReset, m, u, s)
+	default:
+		fmt.Fprintln(out, "Subcommand /memory: set <isi>, user <isi>, soul <isi>, del <no|kata>, limit <angka>")
+	}
+}
+
+func handleUndoCLI(out io.Writer) {
+	restored, err := tool.RestoreLastCheckpoint(filepath.Join(config.Home(), "checkpoints"))
+	if err != nil {
+		fmt.Fprintf(out, "%s⏪ Tidak dapat undo: %v%s\n", cYellow, err, cReset)
+		return
+	}
+	fmt.Fprintf(out, "%s⏪ Undo berhasil! File dikembalikan:%s %s\n", cGreen, cReset, restored)
+}
+
+func handleAccountCLI(arg string, out io.Writer, opts *RunOptions) {
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+		return
+	}
+	fields := strings.Fields(strings.TrimSpace(arg))
+	if len(fields) == 0 || strings.EqualFold(fields[0], "list") {
+		accounts := config.ListAccounts(cfg)
+		fmt.Fprintf(out, "%s╭─ Akun & Provider (%d)%s\n", cCyan, len(accounts), cReset)
+		for _, a := range accounts {
+			st := cGreen + "aktif" + cReset
+			if !a.HasKey {
+				st = cRed + "tanpa key" + cReset
+			}
+			fmt.Fprintf(out, "  %s%-12s%s (%s) model=%s%s%s key=%s (%s)\n",
+				cYellow, a.Name, cReset, a.Kind, cGreen, a.DefaultModel, cReset, a.MaskedKey, st)
+		}
+		fmt.Fprintf(out, "%sPerintah: /account add <nama> <kind> <key> [model] | /account key <nama> <key> | /account use <nama> | /account rm <nama>%s\n", cDim, cReset)
+		return
+	}
+	switch strings.ToLower(fields[0]) {
+	case "add":
+		if len(fields) < 4 {
+			fmt.Fprintln(out, "Pemakaian: /account add <nama> <kind> <api_key> [default_model] [base_url]")
+			return
+		}
+		var defM, bURL string
+		if len(fields) >= 5 {
+			defM = fields[4]
+		}
+		if len(fields) >= 6 {
+			bURL = fields[5]
+		}
+		if _, info, err := config.UpsertAccount(fields[1], fields[2], fields[3], defM, bURL, cfg); err != nil {
+			fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+		} else {
+			fmt.Fprintf(out, "%s✅ Akun %s (%s) disimpan:%s model=%s key=%s\n", cGreen, info.Name, info.Kind, cReset, info.DefaultModel, info.MaskedKey)
+		}
+	case "key":
+		if len(fields) < 3 {
+			fmt.Fprintln(out, "Pemakaian: /account key <nama> <api_key>")
+			return
+		}
+		if _, info, err := config.UpsertAccount(fields[1], "", fields[2], "", "", cfg); err != nil {
+			fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+		} else {
+			fmt.Fprintf(out, "%s🔑 Key akun %s diperbarui:%s %s\n", cGreen, info.Name, cReset, info.MaskedKey)
+		}
+	case "use", "switch":
+		if len(fields) >= 2 && opts != nil && opts.SwitchModel != nil {
+			if msg, err := opts.SwitchModel(fields[1]); err == nil {
+				fmt.Fprintln(out, msg)
+				return
+			}
+		}
+		if len(fields) >= 2 {
+			fmt.Fprintf(out, "%s✅ Akun aktif: %s%s\n", cGreen, fields[1], cReset)
+		}
+	case "rm", "remove", "delete":
+		if len(fields) >= 2 {
+			if _, err := config.RemoveAccount(fields[1], cfg); err != nil {
+				fmt.Fprintf(out, "%s✖ %v%s\n", cRed, err, cReset)
+			} else {
+				fmt.Fprintf(out, "%s🗑️ Akun %s dihapus.%s\n", cGreen, fields[1], cReset)
+			}
+		}
 	}
 }

@@ -78,7 +78,11 @@ func (h *telegramHandler) buildModelMenu(ctx context.Context, chatID int64, page
 	activeModel := cr.GetModel()
 	savedRef := ""
 	if h.store != nil {
-		savedRef, _ = h.store.GetChatModel(ctx, chatID)
+		sessID := telegram.SessionChatID(ctx, chatID)
+		savedRef, _ = h.store.GetChatModel(ctx, sessID)
+		if savedRef == "" && sessID != chatID {
+			savedRef, _ = h.store.GetChatModel(ctx, chatID)
+		}
 	}
 	opts := h.modelOptions()
 
@@ -101,7 +105,7 @@ func (h *telegramHandler) buildModelMenu(ctx context.Context, chatID int64, page
 	} else {
 		fmt.Fprintf(&b, "• **Total opsi:** %d (Halaman %d/%d)\n", total, page+1, totalPages)
 	}
-	b.WriteString("\nPilih lewat tombol di bawah atau ketik `/model <nama>`.")
+	b.WriteString("\nPilih lewat tombol di bawah, ketik `/model <nama>`, atau tambah model baru: `/model add <nama> <provider> <context>`.")
 
 	var rows [][]telegram.InlineButton
 	start := page * modelPageSize
@@ -127,6 +131,7 @@ func (h *telegramHandler) buildModelMenu(ctx context.Context, chatID int64, page
 	}
 	rows = append(rows, []telegram.InlineButton{
 		{Text: "🔄 Refresh", CallbackData: fmt.Sprintf("mdl:p:%d", page), Style: "primary"},
+		{Text: "🔑 Akun", CallbackData: "cmd:account", Style: "primary"},
 		{Text: "📊 Status", CallbackData: "cmd:status", Style: "primary"},
 		{Text: "⬅️ Menu", CallbackData: "cmd:menu", Style: "primary"},
 	})
@@ -277,7 +282,7 @@ func (h *telegramHandler) buildStatusMenu(ctx context.Context, chatID int64) (st
 	if win <= 0 {
 		win = 32000
 	}
-	msgs, _ := h.store.Messages(ctx, chatID)
+	msgs, _ := h.store.Messages(ctx, telegram.SessionChatID(ctx, chatID))
 	used := agent.EstimateTokens(msgs)
 	if cr.Tools != nil {
 		used += agent.EstimateRequestTokens("", cr.Tools.Defs(), nil)
@@ -290,7 +295,7 @@ func (h *telegramHandler) buildStatusMenu(ctx context.Context, chatID int64) (st
 		skillsCount = len(cr.Skills.Names())
 	}
 	text := fmt.Sprintf("📊 **Status Sesi**\n• **Model:** `%s`\n• **Approval:** `%s`\n• **Konteks:** %d / %d tok (%.0f%%)\n• **Riwayat:** %d pesan aktif\n• **Skills:** %d terdaftar\n• **Biaya Hari Ini:** $%.4f USD",
-		cr.GetModel(), cr.GetApprovalMode(), used, win, pct, len(msgs), skillsCount, u.CostUSD)
+		cr.GetModel(), cr.GetApprovalMode(), used, win, pct, len(msgs), skillsCount, u.CostUSD) + h.updateFooter()
 
 	rows := [][]telegram.InlineButton{
 		{
@@ -306,6 +311,7 @@ func (h *telegramHandler) buildStatusMenu(ctx context.Context, chatID int64) (st
 		},
 		{
 			{Text: "🔄 Refresh", CallbackData: "cmd:status", Style: "primary"},
+			{Text: "👥 Group & Topik", CallbackData: "cmd:group", Style: "primary"},
 			{Text: "🏠 Menu Utama", CallbackData: "cmd:menu", Style: "primary"},
 		},
 	}

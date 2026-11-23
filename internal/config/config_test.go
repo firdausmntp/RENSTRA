@@ -141,4 +141,61 @@ providers:
 	if reloaded.DefaultModel != "oai:gpt-4o" {
 		t.Fatalf("reloaded DefaultModel = %q, want oai:gpt-4o", reloaded.DefaultModel)
 	}
+
+	// ParseAddModelArgs & AddModel
+	spec, err := config.ParseAddModelArgs([]string{"claude-3-7-sonnet", "ant", "200k", "8192", "vision", "alias=s37"}, reloaded)
+	if err != nil {
+		t.Fatalf("ParseAddModelArgs: %v", err)
+	}
+	if spec.Model != "claude-3-7-sonnet" || spec.Provider != "ant" || spec.Context != 200000 || spec.MaxOutput != 8192 || !spec.Vision || spec.Alias != "s37" {
+		t.Fatalf("unexpected spec: %+v", spec)
+	}
+	afterAdd, err := config.AddModel(spec, reloaded)
+	if err != nil {
+		t.Fatalf("AddModel: %v", err)
+	}
+	mc := afterAdd.Providers["ant"].ModelConfig("claude-3-7-sonnet")
+	if mc.Context != 200000 || mc.MaxOutput != 8192 || !mc.Vision || afterAdd.Aliases["s37"] != "ant:claude-3-7-sonnet" {
+		t.Fatalf("added model config mismatch: %+v aliases=%+v", mc, afterAdd.Aliases)
+	}
 }
+
+func TestAccountManagement(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("RENSTRA_HOME", dir)
+	cfgPath := filepath.Join(dir, "config.yaml")
+	raw := `default_model: openai:gpt-4o-mini
+providers:
+  openai:
+    kind: openai
+    api_key_env: OPENAI_API_KEY
+    default_model: gpt-4o-mini
+`
+	if err := os.WriteFile(cfgPath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "sk-test-12345678")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, info, err := config.UpsertAccount("openrouter2", "openrouter", "sk-or-v1-1234567890abcdef", "anthropic/claude-3.5-sonnet", "", cfg)
+	if err != nil {
+		t.Fatalf("UpsertAccount: %v", err)
+	}
+	if !info.HasKey || info.DefaultModel != "anthropic/claude-3.5-sonnet" {
+		t.Fatalf("unexpected AccountInfo: %+v", info)
+	}
+	accounts := config.ListAccounts(updated)
+	if len(accounts) != 2 {
+		t.Fatalf("len(accounts) = %d, want 2", len(accounts))
+	}
+	afterRm, err := config.RemoveAccount("openrouter2", updated)
+	if err != nil {
+		t.Fatalf("RemoveAccount: %v", err)
+	}
+	if len(afterRm.Providers) != 1 {
+		t.Fatalf("expected 1 provider after remove, got %d", len(afterRm.Providers))
+	}
+}
+

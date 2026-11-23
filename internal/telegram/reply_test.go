@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -211,5 +212,114 @@ func TestSendRichBlocksWithDividerAndFallback(t *testing.T) {
 	}
 	if got := api.texts(); len(got) != 1 || !strings.Contains(got[0], "────────") {
 		t.Fatalf("expected HTML fallback divider ────────, got %v", got)
+	}
+}
+
+func TestGroupTopicFilteringMentionModeAndBotAPI105(t *testing.T) {
+	var gotSettings map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/getMe"):
+			w.Write([]byte(`{"ok":true,"result":{"id":900,"is_bot":true,"first_name":"Renstra","username":"renstra_bot","active_usernames":["renstra_bot","renstra_ai"],"can_join_groups":true,"can_read_all_group_messages":true,"has_topics_enabled":true,"has_topic_sidebar":true,"inline_query_placeholder":"Tanya RENSTRA..."}}`))
+		case strings.HasSuffix(r.URL.Path, "/setMySettings"):
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			gotSettings = body
+			w.Write([]byte(`{"ok":true,"result":true}`))
+		default:
+			w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+		}
+	}))
+	defer srv.Close()
+
+	b, err := New(Config{
+		Token:         "tok",
+		AllowedUsers:  []int64{42},
+		AllowedTopics: []int64{101},
+		GroupMode:     "mention",
+		APIBase:       srv.URL,
+		WorkspaceDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Bot API 10.5 GetMe & SetMySettings
+	info, err := b.GetMe(context.Background())
+	if err != nil {
+		t.Fatalf("GetMe: %v", err)
+	}
+	if info.Username != "renstra_bot" || !info.HasTopicSidebar || len(info.ActiveUsernames) != 2 {
+		t.Fatalf("unexpected BotFullInfo: %+v", info)
+	}
+	tTrue := true
+	if err := b.SetMySettings(context.Background(), BotSettings{
+		CanJoinGroups:    &tTrue,
+		HasTopicsEnabled: &tTrue,
+		HasTopicSidebar:  &tTrue,
+		CallbackQueryMode: "inline",
+	}); err != nil {
+		t.Fatalf("SetMySettings: %v", err)
+	}
+	if gotSettings["has_topic_sidebar"] != true || gotSettings["callback_query_mode"] != "inline" {
+		t.Fatalf("unexpected setMySettings payload: %+v", gotSettings)
+	}
+
+	// 2. Group topic filtering & mention mode
+	h := &captureReplyHandler{reply: "oke"}
+
+	// Unrelated topic (#202, not in AllowedTopics=[101]) is ignored
+	b.handleUpdate(context.Background(), h, update{
+		UpdateID: 701,
+		Message: &message{
+			MessageID:       1,
+			MessageThreadID: 202,
+			IsTopicMessage:  true,
+			From:            &tgUser{ID: 42, FirstName: "Budi", Username: "budi"},
+			Chat:            chat{ID: -100500, Type: "supergroup", Title: "Core Team", IsForum: true},
+			Text:            "@renstra_bot cek topik 202",
+		},
+	})
+	if h.gotText != "" {
+		t.Fatalf("unrelated topic 202 should be ignored, got %q", h.gotText)
+	}
+
+	// Relevant topic (#101) without mention in "mention" mode is ignored
+	b.handleUpdate(context.Background(), h, update{
+		UpdateID: 702,
+		Message: &message{
+			MessageID:       2,
+			MessageThreadID: 101,
+			IsTopicMessage:  true,
+			From:            &tgUser{ID: 42, FirstName: "Budi", Username: "budi"},
+			Chat:            chat{ID: -100500, Type: "supergroup", Title: "Core Team", IsForum: true},
+			Text:            "obrolan antar member",
+		},
+	})
+	if h.gotText != "" {
+		t.Fatalf("unmentioned group message in mention mode should be ignored, got %q", h.gotText)
+	}
+
+	// Relevant topic (#101) WITH @renstra_bot mention and forum topic creation context is processed
+	b.handleUpdate(context.Background(), h, update{
+		UpdateID: 703,
+		Message: &message{
+			MessageID:       3,
+			MessageThreadID: 101,
+			IsTopicMessage:  true,
+			From:            &tgUser{ID: 42, FirstName: "Budi", Username: "budi"},
+			Chat:            chat{ID: -100500, Type: "supergroup", Title: "Core Team", IsForum: true},
+			Text:            "@renstra_bot deploy sekarang",
+			ReplyToMessage: &message{
+				MessageID:         101,
+				ForumTopicCreated: &tgForumTopic{Name: "DevOps Infra"},
+			},
+		},
+	})
+	if !strings.Contains(h.gotText, `Grup: "Core Team"`) ||
+		!strings.Contains(h.gotText, `Topik: "DevOps Infra" (#101)`) ||
+		!strings.Contains(h.gotText, "Pengirim: Budi (@budi)") ||
+		!strings.Contains(h.gotText, "deploy sekarang") {
+		t.Fatalf("unexpected group/topic context: %q", h.gotText)
 	}
 }

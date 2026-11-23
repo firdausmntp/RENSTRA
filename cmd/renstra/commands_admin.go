@@ -58,8 +58,9 @@ func migrateCmd(args []string) error {
 	fmt.Printf("  Sumber : %s\n", rep.SourceDir)
 	fmt.Printf("  Tujuan : %s\n", rep.DestDir)
 	fmt.Printf("  Config : written=%v\n", rep.ConfigWritten)
+	fmt.Printf("  Env    : copied=%v (keys=%d)\n", rep.EnvCopied, len(rep.EnvVarsFound))
 	fmt.Printf("  MCP    : written=%v (servers=%d)\n", rep.MCPWritten, rep.MCPServers)
-	fmt.Printf("  Memory : MEMORY.md=%v, USER.md=%v\n", rep.MemoryCopied, rep.UserCopied)
+	fmt.Printf("  Memory : MEMORY.md=%v, USER.md=%v, SOUL.md=%v\n", rep.MemoryCopied, rep.UserCopied, rep.SoulCopied)
 	fmt.Printf("  Skills : disalin=%d, dilewati=%d\n", rep.SkillsCopied, rep.SkillsSkipped)
 	fmt.Printf("  History: sesi=%d (dilewati=%d), pesan=%d\n", rep.SessionsCopied, rep.SessionsSkipped, rep.MessagesCopied)
 	if len(rep.EnvVarsFound) > 0 {

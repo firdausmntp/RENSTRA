@@ -102,7 +102,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 	history = append(history, user)
 
 	var turnID int64
-	if chatID > 0 && chatID < 1_000_000_000_000_000 {
+	if chatID != 0 && chatID < 1_000_000_000_000_000 {
 		turnID, _ = r.Store.StartTurn(ctx, chatID)
 	}
 	turnStarted := time.Now()
@@ -142,7 +142,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 				stats.ContextUsed = EstimateRequestTokens(r.system(), defs, history)
 			}
 		}
-		if r.Logger != nil && chatID > 0 && chatID < 1_000_000_000_000_000 {
+		if r.Logger != nil && chatID != 0 && chatID < 1_000_000_000_000_000 {
 			r.Logger.Info("turn_finished",
 				"chat_id", chatID,
 				"model", r.GetModel(),
@@ -237,6 +237,9 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			turnTokensIn += usage.InputTokens
 			turnTokensOut += usage.OutputTokens
 			lastUsageIn = usage.InputTokens
+			if usage.InputTokens > win {
+				r.SetContextWindow(autoScaleContextWindow(usage.InputTokens))
+			}
 			turnCost += (float64(usage.InputTokens)/1e6)*res.priceIn + (float64(usage.OutputTokens)/1e6)*res.priceOut
 			r.recordUsageWithPrices(usage, res.priceIn, res.priceOut)
 		}
@@ -307,4 +310,13 @@ func (r *Runner) threshold() float64 {
 		return compactThreshold
 	}
 	return r.Threshold
+}
+
+func autoScaleContextWindow(inputTokens int) int {
+	for _, tier := range []int{64000, 128000, 200000, 400000, 1000000, 2000000} {
+		if inputTokens < tier {
+			return tier
+		}
+	}
+	return inputTokens * 2
 }
