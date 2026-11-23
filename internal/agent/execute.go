@@ -263,3 +263,33 @@ func extractImageAttachments(text string) []provider.Attachment {
 	}
 	return out
 }
+
+func describeToolPhase(name, rawArgs string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(rawArgs), &m); err == nil {
+		for _, k := range []string{"cmd", "path", "url", "query", "task"} {
+			if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+				s := strings.Join(strings.Fields(v), " ")
+				if len([]rune(s)) > 80 {
+					s = string([]rune(s)[:80]) + "..."
+				}
+				return fmt.Sprintf("menjalankan tool %s (%s: %s)", name, k, s)
+			}
+		}
+	}
+	return fmt.Sprintf("menjalankan tool %s", name)
+}
+
+func wrapTimeoutErr(err error, phase string, since time.Time, iter int, turnLimit time.Duration) error {
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "turn timeout") {
+		return err
+	}
+	elapsed := time.Since(since).Truncate(time.Second)
+	if phase != "" {
+		if turnLimit > 0 {
+			return fmt.Errorf("turn timeout (batas %s, iterasi %d) saat %s (berjalan %s): %w", turnLimit, iter, phase, elapsed, err)
+		}
+		return fmt.Errorf("timeout (iterasi %d) saat %s (berjalan %s): %w", iter, phase, elapsed, err)
+	}
+	return err
+}

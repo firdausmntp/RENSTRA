@@ -40,6 +40,35 @@ func WithTopic(ctx context.Context, threadID int64) context.Context {
 	return withReplyTarget(ctx, rt.replyToID, threadID)
 }
 
+// SendToTopic sends a formatted Markdown message to a specific chat and forum topic
+// (without replying to the triggering message in the source topic).
+func (b *Bot) SendToTopic(ctx context.Context, chatID, topicID int64, markdown string) error {
+	targetCtx := withReplyTarget(context.Background(), 0, topicID)
+	if ctx != nil {
+		if deadline, ok := ctx.Deadline(); ok {
+			var cancel context.CancelFunc
+			targetCtx, cancel = context.WithDeadline(targetCtx, deadline)
+			defer cancel()
+		}
+	}
+	var lastErr error
+	for _, chunk := range SplitMessage(markdown, MaxMessageLength) {
+		if len([]rune(markdownToHTML(chunk))) > MaxMessageLength {
+			for _, sub := range SplitMessage(chunk, 2400) {
+				if err := b.SendMessage(targetCtx, chatID, sub); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err := b.SendMessage(targetCtx, chatID, chunk); err != nil {
+			lastErr = err
+			break
+		}
+	}
+	return lastErr
+}
+
 // SessionChatID returns an isolated session key per (chatID, threadID) when inside
 // a forum topic so different topics in the same group keep separate histories.
 func SessionChatID(ctx context.Context, chatID int64) int64 {

@@ -81,7 +81,7 @@ func handleCommand(ctx context.Context, r *agent.Runner, chatID int64, line stri
 	case "/version":
 		ver := opts.Version
 		if ver == "" {
-			ver = "v1.2.7"
+			ver = "v1.2.8"
 		}
 		fmt.Fprintf(out, "%s⚡ renstra%s %s%s%s\n", cCyan, cReset, cGreen, ver, cReset)
 		if opts.UpdateInfo != "" {

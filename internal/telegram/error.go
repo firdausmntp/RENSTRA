@@ -225,14 +225,28 @@ func FormatError(err error) string {
 		b.WriteString("2. Gunakan provider cadangan lain dengan perintah: `/model <nama>`")
 
 	case strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") || strings.Contains(strings.ToLower(err.Error()), "timeout"):
-		b.WriteString("⏱️ **Waktu Permintaan Habis (Timeout)**\n\n")
-		if pe.Endpoint != "" {
-			fmt.Fprintf(&b, "• **Endpoint:** `%s`\n", pe.Endpoint)
+		lowerErr := strings.ToLower(err.Error())
+		if strings.Contains(lowerErr, "turn timeout") || strings.Contains(lowerErr, "menjalankan tool") {
+			b.WriteString("⏱️ **Batas Waktu Tugas Habis (Turn / Tool Timeout)**\n\n")
+			if pe.Message != "" {
+				b.WriteString("> " + formatQuote(pe.Message) + "\n\n")
+			}
+			b.WriteString("💡 **Tips Solusi:**\n")
+			b.WriteString("1. Perintah/tool berjalan melewati batas waktu turn. Pecah tugas berat atau jalankan di background (`nohup ... &`).\n")
+			b.WriteString("2. Perpanjang batas turn jika diperlukan: `/config turn_timeout 30m`")
+		} else {
+			b.WriteString("⏱️ **Waktu Permintaan Habis (Timeout)**\n\n")
+			if pe.Endpoint != "" {
+				fmt.Fprintf(&b, "• **Endpoint:** `%s`\n", pe.Endpoint)
+			}
+			b.WriteString("• **Penyebab:** Provider tidak memberikan respons sebelum batas waktu habis.\n\n")
+			if pe.Message != "" && !strings.EqualFold(pe.Message, "context deadline exceeded") {
+				b.WriteString("> " + formatQuote(pe.Message) + "\n\n")
+			}
+			b.WriteString("💡 **Tips Solusi:**\n")
+			b.WriteString("1. Coba ulangi pertanyaan atau instruksi dengan kalimat lebih ringkas.\n")
+			b.WriteString("2. Periksa kestabilan koneksi internet ke provider.")
 		}
-		b.WriteString("• **Penyebab:** Provider tidak memberikan respons sebelum batas waktu habis.\n\n")
-		b.WriteString("💡 **Tips Solusi:**\n")
-		b.WriteString("1. Coba ulangi pertanyaan atau instruksi dengan kalimat lebih ringkas.\n")
-		b.WriteString("2. Periksa kestabilan koneksi internet ke provider.")
 
 	case strings.Contains(strings.ToLower(err.Error()), "connection refused") || strings.Contains(strings.ToLower(err.Error()), "no such host"):
 		b.WriteString("🌐 **Gagal Terhubung ke Provider (Network Error)**\n\n")

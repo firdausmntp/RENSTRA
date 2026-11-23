@@ -160,10 +160,19 @@ func FormatCLIError(err error) string {
 			"Beralih sementara ke provider lain dengan: /model <nama>",
 		}
 	case strings.Contains(strings.ToLower(err.Error()), "deadline exceeded") || strings.Contains(strings.ToLower(err.Error()), "timeout"):
-		title = "Waktu Permintaan Habis (Timeout)"
-		tips = []string{
-			"Ulangi pertanyaan dengan kalimat yang lebih spesifik dan ringkas",
-			"Periksa kestabilan jaringan internet server Anda",
+		lowerErr := strings.ToLower(err.Error())
+		if strings.Contains(lowerErr, "turn timeout") || strings.Contains(lowerErr, "menjalankan tool") {
+			title = "Batas Waktu Tugas Habis (Turn / Tool Timeout)"
+			tips = []string{
+				"Perintah/tool berjalan melebihi batas waktu turn; jalankan di background atau pecah tugas",
+				"Perpanjang batas turn jika perlu lewat config.yaml (`max_turn_timeout: 30m`)",
+			}
+		} else {
+			title = "Waktu Permintaan Habis (Timeout)"
+			tips = []string{
+				"Ulangi pertanyaan dengan kalimat yang lebih spesifik dan ringkas",
+				"Periksa kestabilan jaringan internet server Anda",
+			}
 		}
 	case strings.Contains(strings.ToLower(err.Error()), "connection refused") || strings.Contains(strings.ToLower(err.Error()), "no such host"):
 		title = "Koneksi ke Provider Gagal (Network Error)"

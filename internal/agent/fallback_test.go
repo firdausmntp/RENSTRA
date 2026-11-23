@@ -152,7 +152,8 @@ func TestSmartFallbackContextOverflowSkipsSmallWindow(t *testing.T) {
 
 func TestSmartFallbackEmptyResponseFallsBack(t *testing.T) {
 	st := newStore(t)
-	primary := &fakeProvider{steps: [][]provider.Event{{{Done: true}}}}
+	empty := []provider.Event{{Done: true}}
+	primary := &fakeProvider{steps: [][]provider.Event{empty, empty, empty}}
 	fallback := &fakeProvider{steps: [][]provider.Event{{{Text: "ok cadangan", Done: true}}}}
 	r := &agent.Runner{
 		Provider:  primary,

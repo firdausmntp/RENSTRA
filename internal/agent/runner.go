@@ -176,6 +176,8 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 
 	var lastSig string
 	var repeatCount int
+	activePhase := ""
+	phaseStart := turnStarted
 
 	for i := 0; i < maxIters; i++ {
 		iterCount = i + 1
@@ -202,9 +204,11 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			sysPrompt += "\n[pengingat sistem: jika ada fakta penting baru tentang user atau keputusan jangka panjang, perbarui tool memory; jika ada prosedur baru, simpan ke tool skill]"
 		}
 
+		activePhase = fmt.Sprintf("menunggu respons model %s (%s)", primary.Model, primary.Provider.Name())
+		phaseStart = time.Now()
 		res, err := r.streamWithFallback(ctx, sysPrompt, history)
 		if err != nil {
-			return "", err
+			return "", wrapTimeoutErr(err, activePhase, phaseStart, iterCount, r.TurnTimeout)
 		}
 
 		text := res.text
@@ -214,13 +218,13 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 
 		if ctx.Err() != nil {
 			r.savePartial(chatID, text)
-			return text, ctx.Err()
+			return text, wrapTimeoutErr(ctx.Err(), activePhase, phaseStart, iterCount, r.TurnTimeout)
 		}
 		if streamErr != nil {
 			if text != "" {
 				r.savePartial(chatID, text)
 			}
-			return text, streamErr
+			return text, wrapTimeoutErr(streamErr, activePhase, phaseStart, iterCount, r.TurnTimeout)
 		}
 
 		if len(calls) == 0 && strings.TrimSpace(text) == "" {
@@ -257,7 +261,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		for idx, call := range calls {
 			if ctx.Err() != nil {
 				r.fillCancelledTools(chatID, calls[idx:])
-				return text, ctx.Err()
+				return text, wrapTimeoutErr(ctx.Err(), activePhase, phaseStart, iterCount, r.TurnTimeout)
 			}
 			sig := call.Name + ":" + strings.TrimSpace(call.Arguments)
 			if sig == lastSig {
@@ -270,11 +274,17 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			if repeatCount >= 3 {
 				result = "[loop terdeteksi: tool " + call.Name + " dengan argumen identik sudah dipanggil 3 kali berturut-turut. Hentikan pengulangan dan berikan jawaban akhir atau gunakan cara lain.]"
 			} else {
+				activePhase = describeToolPhase(call.Name, call.Arguments)
+				phaseStart = time.Now()
 				toolCtx := ctx
 				if tool.ChatIDFrom(toolCtx) == 0 {
 					toolCtx = tool.WithChatID(toolCtx, chatID)
 				}
 				result = r.executeTool(toolCtx, call)
+				if ctx.Err() != nil {
+					r.fillCancelledTools(chatID, calls[idx:])
+					return text, wrapTimeoutErr(ctx.Err(), activePhase, phaseStart, iterCount, r.TurnTimeout)
+				}
 			}
 			msg := provider.Message{Role: provider.RoleTool, Content: result, ToolCallID: call.ID}
 			if _, err := r.appendWithFallback(ctx, chatID, msg); err != nil {

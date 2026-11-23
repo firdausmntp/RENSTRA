@@ -4,6 +4,23 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.2.8 (Anti-Lone-`>` Streaming, `send_telegram` Cross-Topic, Empty-Response Retry & Informative Tool/Turn Timeout)
+
+- [x] **Anti-Lone-`>` Streaming Draft & Fallback Finalize**
+  - **Lokasi:** [`internal/telegram/stream.go`](internal/telegram/stream.go), [`internal/telegram/send.go`](internal/telegram/send.go), [`internal/telegram/format.go`](internal/telegram/format.go)
+  - **Perbaikan:** Menahan flush token awal yang hanya berisi simbol/prefix markdown (seperti `>` tunggal pada awal blockquote) hingga ada konten kata bermakna (`hasMeaningfulStreamText`), mencegah terkirimnya pesan kosong/`>` terpisah sebelum balasan penuh, serta fallback `SendMessage` jika `EditMessage` saat `Finalize` gagal.
+- [x] **Tool Native `send_telegram` untuk Pesan Antar-Topik / Antar-Chat Terformat**
+  - **Lokasi:** [`internal/tool/send_telegram.go`](internal/tool/send_telegram.go), [`internal/telegram/reply.go`](internal/telegram/reply.go), [`internal/config/config.go`](internal/config/config.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go)
+  - **Fitur:** Menambahkan tool `send_telegram(chat_id, topic_id, text)` agar agent dapat mengirim pesan ke topik forum atau chat lain secara langsung dengan konversi Markdown -> Telegram HTML (`<blockquote>`, bold, code) otomatis.
+- [x] **Retry Attempt Otomatis Jika Response API AI Kosong**
+  - **Lokasi:** [`internal/agent/fallback.go`](internal/agent/fallback.go)
+  - **Perbaikan:** Menambahkan hingga 2x retry otomatis (`emptyResponseMaxRetries`) pada provider/model yang sama dengan jeda singkat sebelum berpindah ke fallback atau mengembalikan error.
+- [x] **Streaming Tool Progress Informatif & Diagnosis Timeout Akurat**
+  - **Lokasi:** [`internal/telegram/stream.go`](internal/telegram/stream.go), [`internal/cli/stream.go`](internal/cli/stream.go), [`internal/agent/runner.go`](internal/agent/runner.go), [`internal/agent/execute.go`](internal/agent/execute.go), [`internal/telegram/error.go`](internal/telegram/error.go), [`internal/cli/error.go`](internal/cli/error.go), [`internal/provider/openai/client.go`](internal/provider/openai/client.go)
+  - **Perbaikan:** Menampilkan ringkasan argumen & durasi berjalan pada status tool (`⏳ Menjalankan terminal: \`...\` (15s)`), memindahkan timeout HTTP OpenAI ke `ResponseHeaderTimeout` agar stream panjang tidak terputus, serta melacak fase aktif di `Runner.Run` sehingga error `context deadline exceeded` menampilkan detail perintah/tool/iterasi yang timeout dan dibedakan dari provider timeout di `FormatError`.
+
+---
+
 ## Rilis v1.2.7 (Telegram Group & Forum Topics, Core Telegram Bot API 10.5, Connection Pooling & Isolasi Topik)
 
 - [x] **Dukungan Penuh Group, Supergroup & Forum Topics (Tanpa Tolakan `"DM saya langsung"`)**

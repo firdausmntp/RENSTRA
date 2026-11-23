@@ -102,9 +102,13 @@ func (b *Bot) SendMessageReturningID(ctx context.Context, chatID int64, text str
 	if strings.TrimSpace(text) == "" {
 		return 0, errors.New("telegram: teks kosong")
 	}
+	rendered := markdownToHTML(text)
+	if strings.TrimSpace(rendered) == "" {
+		rendered = htmlEscapePlain(text)
+	}
 	payload := map[string]any{
 		"chat_id":    chatID,
-		"text":       markdownToHTML(text),
+		"text":       rendered,
 		"parse_mode": "HTML",
 	}
 	applyReplyTarget(ctx, payload)

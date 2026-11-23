@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"renstra/internal/provider"
 )
+
+const emptyResponseMaxRetries = 2
 
 // FallbackTarget is a secondary provider used when the primary fails.
 type FallbackTarget struct {
@@ -90,53 +93,93 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			)
 		}
 
-		ch, err := target.Provider.Stream(ctx, req)
-		if err != nil {
-			kind := health.recordFailure(target, err)
-			if kind == errKindContext && target.ContextWindow > minCtxWin {
-				minCtxWin = target.ContextWindow
+		var (
+			text         strings.Builder
+			calls        []provider.ToolCall
+			streamErr    error
+			usage        *provider.Usage
+			hasAnyOutput bool
+			targetFailed bool
+		)
+
+		for attempt := 0; attempt <= emptyResponseMaxRetries; attempt++ {
+			if ctx.Err() != nil {
+				return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
 			}
-			lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, err)
+			if attempt > 0 {
+				if r.Logger != nil {
+					r.Logger.Warn("retry_empty_response", "provider", target.Provider.Name(), "model", target.Model, "attempt", attempt+1)
+				}
+				select {
+				case <-ctx.Done():
+					return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
+				case <-time.After(time.Duration(attempt) * 750 * time.Millisecond):
+				}
+			}
+
+			ch, err := target.Provider.Stream(ctx, req)
+			if err != nil {
+				kind := health.recordFailure(target, err)
+				if kind == errKindContext && target.ContextWindow > minCtxWin {
+					minCtxWin = target.ContextWindow
+				}
+				lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, err)
+				targetFailed = true
+				break
+			}
+
+			text.Reset()
+			calls = nil
+			streamErr = nil
+			usage = nil
+			hasAnyOutput = false
+
+			for ev := range ch {
+				if ev.Err != nil && streamErr == nil {
+					streamErr = ev.Err
+				}
+				if ev.Usage != nil {
+					usage = ev.Usage
+				}
+				if ev.Text != "" {
+					hasAnyOutput = true
+					text.WriteString(ev.Text)
+					if !promptedMode {
+						if r.Out != nil {
+							io.WriteString(r.Out, ev.Text)
+						}
+						if sw != nil {
+							io.WriteString(sw, ev.Text)
+						}
+					}
+				}
+				if len(ev.ToolCalls) > 0 {
+					hasAnyOutput = true
+					calls = ev.ToolCalls
+				}
+			}
+
+			if ctx.Err() != nil {
+				return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
+			}
+
+			isEmpty := streamErr == nil && len(calls) == 0 && strings.TrimSpace(text.String()) == ""
+			if isEmpty || (streamErr != nil && !hasAnyOutput && classifyFallbackErr(streamErr) == errKindTransient) {
+				lastErr = fmt.Errorf("model %s (%s) mengembalikan respons kosong (percobaan %d/%d)", target.Model, target.Provider.Name(), attempt+1, emptyResponseMaxRetries+1)
+				if streamErr != nil {
+					lastErr = fmt.Errorf("provider %s (%s): %w", target.Provider.Name(), target.Model, streamErr)
+				}
+				continue
+			}
+			break
+		}
+
+		if targetFailed {
 			continue
 		}
 
-		var text strings.Builder
-		var calls []provider.ToolCall
-		var streamErr error
-		var usage *provider.Usage
-		hasAnyOutput := false
-
-		for ev := range ch {
-			if ev.Err != nil && streamErr == nil {
-				streamErr = ev.Err
-			}
-			if ev.Usage != nil {
-				usage = ev.Usage
-			}
-			if ev.Text != "" {
-				hasAnyOutput = true
-				text.WriteString(ev.Text)
-				if !promptedMode {
-					if r.Out != nil {
-						io.WriteString(r.Out, ev.Text)
-					}
-					if sw != nil {
-						io.WriteString(sw, ev.Text)
-					}
-				}
-			}
-			if len(ev.ToolCalls) > 0 {
-				hasAnyOutput = true
-				calls = ev.ToolCalls
-			}
-		}
-
-		if ctx.Err() != nil {
-			return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
-		}
-
 		// Retry next fallback if stream failed without emitting output, OR if
-		// stream ended cleanly with completely empty output and backups exist.
+		// stream ended cleanly with completely empty output after all retries.
 		if streamErr != nil && !hasAnyOutput && i < len(candidates)-1 {
 			kind := health.recordFailure(target, streamErr)
 			if kind == errKindContext && target.ContextWindow > minCtxWin {
@@ -147,11 +190,14 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 		}
 
 		finalText := text.String()
-		if streamErr == nil && len(calls) == 0 && strings.TrimSpace(finalText) == "" && i < len(candidates)-1 {
-			emptyErr := fmt.Errorf("model %s mengembalikan respons kosong", target.Model)
+		if streamErr == nil && len(calls) == 0 && strings.TrimSpace(finalText) == "" {
+			emptyErr := fmt.Errorf("model %s (%s) mengembalikan respons kosong setelah %d percobaan", target.Model, target.Provider.Name(), emptyResponseMaxRetries+1)
 			health.recordFailure(target, emptyErr)
 			lastErr = emptyErr
-			continue
+			if i < len(candidates)-1 {
+				continue
+			}
+			return streamResult{}, emptyErr
 		}
 
 		if promptedMode && len(calls) == 0 && streamErr == nil {

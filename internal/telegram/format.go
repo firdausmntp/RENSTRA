@@ -92,6 +92,10 @@ func formatInlineSegment(s string, stash func(string) string) string {
 	return out
 }
 
+func htmlEscapePlain(s string) string {
+	return html.EscapeString(s)
+}
+
 func formatBodySegment(s string, stash func(string) string) string {
 	out := mdInlineCodeRE.ReplaceAllStringFunc(s, func(m string) string {
 		sub := mdInlineCodeRE.FindStringSubmatch(m)

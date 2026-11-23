@@ -14,7 +14,7 @@ func PrintBanner(out io.Writer, r *agent.Runner, opts RunOptions) {
 	out = plainIfNotTTY(out)
 	ver := opts.Version
 	if ver == "" {
-		ver = "v1.2.7"
+		ver = "v1.2.8"
 	}
 	prov := opts.Provider
 	if prov == "" {

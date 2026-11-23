@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -148,7 +149,7 @@ func (w *cliStreamWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// OnTool shows which tool is currently running (args stay private).
+// OnTool shows which tool is currently running (with a brief safe target summary).
 func (w *cliStreamWriter) OnTool(name, args string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -156,8 +157,12 @@ func (w *cliStreamWriter) OnTool(name, args string) {
 		return
 	}
 	w.toolCalls++
+	label := name
+	if detail := summarizeCLIArg(name, args); detail != "" {
+		label = name + ": " + detail
+	}
 	w.toolNote = "⚙ " + name
-	w.loadingMsg = "Menjalankan " + name + "..."
+	w.loadingMsg = "Menjalankan " + label + "..."
 	if !w.interactive {
 		if !w.atLineStart {
 			fmt.Fprintln(w.out)
@@ -254,4 +259,27 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dms", d.Milliseconds())
 	}
 	return fmt.Sprintf("%.1fs", d.Seconds())
+}
+
+func summarizeCLIArg(name, rawArgs string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(rawArgs), &m); err != nil {
+		return ""
+	}
+	var val string
+	switch name {
+	case "terminal":
+		val, _ = m["cmd"].(string)
+	case "read_file", "write_file", "patch", "send_file":
+		val, _ = m["path"].(string)
+	case "web_fetch":
+		val, _ = m["url"].(string)
+	case "web_search":
+		val, _ = m["query"].(string)
+	}
+	val = strings.Join(strings.Fields(val), " ")
+	if len([]rune(val)) > 48 {
+		return string([]rune(val)[:48]) + "..."
+	}
+	return val
 }

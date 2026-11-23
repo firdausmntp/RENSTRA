@@ -184,7 +184,15 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.2.7)
+## 7. Status Rilis & Pengembangan (v1.2.8)
+
+Fitur & perbaikan v1.2.8:
+1. **Anti-Lone-`>` Streaming & Fallback Finalize:** Menahan flush token awal yang hanya berisi simbol/prefix markdown (seperti `>` tunggal pada blockquote) hingga ada konten bermakna (`hasMeaningfulStreamText`), serta fallback `SendMessage` jika `EditMessage` saat `Finalize` gagal.
+2. **Tool Native `send_telegram` Cross-Topic:** Mengirim pesan terformat Markdown -> Telegram HTML (`<blockquote>`, bold, code) ke `chat_id` & `topic_id` mana pun melalui [`Bot.SendToTopic`](internal/telegram/reply.go).
+3. **Retry Attempt Respons AI Kosong:** `streamWithFallback` otomatis mencoba ulang hingga 2x retry pada model yang sama bila respons kosong atau error transient tanpa output sebelum berpindah ke fallback.
+4. **Progress Tool Informatif & Diagnosis Timeout Akurat:** Menampilkan ringkasan argumen & durasi berjalan (`⏳ Menjalankan terminal: \`...\` (15s)`), memindahkan HTTP timeout OpenAI ke `ResponseHeaderTimeout`, melacak fase aktif di `Runner.Run`, serta membedakan Turn/Tool Timeout vs Provider Timeout di `FormatError` & `FormatCLIError`.
+
+Fitur v1.2.7 sebelumnya:
 
 Fitur v1.2.7 telah diimplementasikan:
 1. **Dukungan Group, Supergroup & Forum Topics Relevan (`/group`):** Menghapus pembatasan `"DM saya langsung"`, mendukung otorisasi grup (`allowed_users`/`allowed_chats` & `From.ID`), filter `allowed_topics`, mode pemicu `group_mode` (`always`/`mention`), menu in-chat `/group` (termasuk `createForumTopic` & `editForumTopic`), injeksi konteks `[Grup | Topik | Pengirim]`, serta isolasi sesi & eksekusi turn paralel antar-topik (`SessionChatID` & `lockScope`).

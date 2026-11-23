@@ -188,6 +188,7 @@ func serveCmd() error {
 		tool.NewDelegate(runner, 0),
 		tool.NewSessionSearch(st),
 		tool.NewSendFile(workspace, bot),
+		tool.NewSendTelegram(bot),
 	}
 	for _, t := range candidates {
 		if cfg.Tools.IsEnabled(t.Name()) {

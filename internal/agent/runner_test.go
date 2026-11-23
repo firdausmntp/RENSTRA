@@ -209,7 +209,8 @@ func TestTurnStatsFallbackEstimateWithoutUsage(t *testing.T) {
 
 func TestEmptyModelResponseReturnsErrorAndNotSaved(t *testing.T) {
 	s := newStore(t)
-	fp := &fakeProvider{steps: [][]provider.Event{{{Done: true}}}}
+	empty := []provider.Event{{Done: true}}
+	fp := &fakeProvider{steps: [][]provider.Event{empty, empty, empty}}
 	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
 	if _, err := r.Run(context.Background(), 1, "halo"); err == nil {
 		t.Fatal("diharapkan error ketika model memberi respons kosong")
@@ -222,5 +223,18 @@ func TestEmptyModelResponseReturnsErrorAndNotSaved(t *testing.T) {
 		if m.Role == provider.RoleAssistant {
 			t.Fatalf("pesan assistant kosong tidak boleh tersimpan: %+v", m)
 		}
+	}
+}
+
+func TestEmptyModelResponseRetriesAndSucceeds(t *testing.T) {
+	s := newStore(t)
+	fp := &fakeProvider{steps: [][]provider.Event{
+		{{Done: true}},
+		{{Text: "berhasil setelah retry", Done: true}},
+	}}
+	r := &agent.Runner{Provider: fp, Tools: tool.NewRegistry(), Store: s, Model: "m", MaxIters: 5, Cwd: t.TempDir(), Out: io.Discard}
+	reply, err := r.Run(context.Background(), 1, "halo")
+	if err != nil || reply != "berhasil setelah retry" {
+		t.Fatalf("got reply=%q err=%v", reply, err)
 	}
 }
