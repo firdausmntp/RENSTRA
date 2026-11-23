@@ -11,6 +11,7 @@ import (
 
 	"renstra/internal/agent"
 	"renstra/internal/config"
+	"renstra/internal/dashboard"
 	"renstra/internal/store"
 	"renstra/internal/telegram"
 	"renstra/internal/tool"
@@ -27,6 +28,8 @@ type telegramHandler struct {
 	mu            sync.Mutex
 	chats         map[int64]*agent.Runner
 	latestVersion string
+	dashAddr      string
+	logHub        *dashboard.LogHub
 }
 
 func (h *telegramHandler) SetLatestVersion(tag string) {
@@ -284,6 +287,17 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 
 	case "/version":
 		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version) + h.updateFooter(), nil
+
+	case "/dashboard":
+		if h.dashAddr == "" {
+			return "📊 Web Dashboard tidak aktif. Jalankan `renstra serve --dashboard-port 8080` untuk mengaktifkannya.", nil
+		}
+		var errCnt, warnCnt int64
+		var buf int
+		if h.logHub != nil {
+			errCnt, warnCnt, buf = h.logHub.Counts()
+		}
+		return fmt.Sprintf("📊 **RENSTRA Web Dashboard**\n• **Listen:** `http://%s`\n• **Log Buffered:** %d entri (`ERROR`: %d, `WARN`: %d)\n• **Kelola:** Live Logs SSE, Skills, Memory/SOUL, Multi-Akun, Cron & Turns.", h.dashAddr, buf, errCnt, warnCnt), nil
 
 	case "/memory":
 		if arg != "" {

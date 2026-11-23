@@ -277,7 +277,70 @@ func (h *telegramHandler) handleModelCmd(ctx context.Context, chatID int64, arg 
 			return fmt.Sprintf("🗑️ Model/alias dihapus dari `config.yaml`: `%s`", removed), nil
 		}
 	}
+	ref, isGlobal := parseGlobalModelFlag(trimmedArg)
+	if isGlobal {
+		if ref == "" {
+			return "", fmt.Errorf("pemakaian: /model <model_id> --global")
+		}
+		return h.switchGlobalModel(ctx, ref)
+	}
 	return h.switchChatModel(ctx, chatID, arg)
+}
+
+func parseGlobalModelFlag(arg string) (string, bool) {
+	fields := strings.Fields(arg)
+	var rest []string
+	global := false
+	for _, f := range fields {
+		if f == "--global" || f == "-g" {
+			global = true
+			continue
+		}
+		rest = append(rest, f)
+	}
+	return strings.Join(rest, " "), global
+}
+
+func (h *telegramHandler) switchGlobalModel(ctx context.Context, ref string) (string, error) {
+	if h.cfg != nil && len(h.cfg.Providers) > 0 {
+		pcfg, model, err := config.Resolve(ref, h.cfg)
+		if err != nil {
+			return "", err
+		}
+		prov, err := buildProvider(pcfg)
+		if err != nil {
+			return "", err
+		}
+		mc := pcfg.ModelConfig(model)
+		h.runner.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+		h.runner.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+		h.mu.Lock()
+		for _, cr := range h.chats {
+			cr.SetModel(prov, model, mc.MaxOutput, mc.Context, mc.PriceIn, mc.PriceOut)
+			cr.SetCapabilities(mc.Vision, mc.Tools != nil && !*mc.Tools)
+		}
+		h.mu.Unlock()
+		_, storedRef, _ := config.SetDefaultModel(ref)
+		if storedRef == "" {
+			storedRef = ref
+		}
+		h.cfg.DefaultModel = storedRef
+		if h.store != nil {
+			_ = h.store.SetGlobalModel(ctx, storedRef)
+		}
+		return fmt.Sprintf("🌐 **Model global diubah ke:** `%s`\nBerlaku untuk seluruh sesi, grup, dan topik.", model), nil
+	}
+
+	h.runner.SetModel(nil, ref, 0, 0, 0, 0)
+	h.mu.Lock()
+	for _, cr := range h.chats {
+		cr.SetModel(nil, ref, 0, 0, 0, 0)
+	}
+	h.mu.Unlock()
+	if h.store != nil {
+		_ = h.store.SetGlobalModel(ctx, ref)
+	}
+	return fmt.Sprintf("🌐 **Model global diubah ke:** `%s`\nBerlaku untuk seluruh sesi, grup, dan topik.", ref), nil
 }
 
 func (h *telegramHandler) handlePersonaCmd(ctx context.Context, chatID int64, arg string) (string, error) {

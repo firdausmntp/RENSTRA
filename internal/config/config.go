@@ -54,6 +54,13 @@ type TelegramConfig struct {
 	CallbackQueryMode       string   `yaml:"callback_query_mode"`
 }
 
+type DashboardConfig struct {
+	Enabled *bool  `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Port    int    `yaml:"port"`
+	Token   string `yaml:"token"`
+}
+
 type ToolsConfig struct {
 	Terminal          *bool `yaml:"terminal"`
 	ReadFile          *bool `yaml:"read_file"`
@@ -114,7 +121,38 @@ type Config struct {
 	Agent        Agent                     `yaml:"agent"`
 	Approval     ApprovalConfig            `yaml:"approval"`
 	Telegram     TelegramConfig            `yaml:"telegram"`
+	Dashboard    DashboardConfig           `yaml:"dashboard"`
 	Tools        ToolsConfig               `yaml:"tools"`
+}
+
+// DashboardListenAddr resolves the HTTP bind address for the web dashboard.
+func (c *Config) DashboardListenAddr(overridePort int, overrideAddr string) (addr string, enabled bool) {
+	if c != nil && c.Dashboard.Enabled != nil && !*c.Dashboard.Enabled && overridePort <= 0 && strings.TrimSpace(overrideAddr) == "" {
+		return "", false
+	}
+	if strings.TrimSpace(overrideAddr) != "" {
+		return strings.TrimSpace(overrideAddr), true
+	}
+	if overridePort > 0 {
+		host := "127.0.0.1"
+		if c != nil && strings.Contains(c.Dashboard.Addr, ":") {
+			if h := strings.SplitN(c.Dashboard.Addr, ":", 2)[0]; h != "" {
+				host = h
+			} else if strings.HasPrefix(c.Dashboard.Addr, ":") {
+				host = ""
+			}
+		}
+		return fmt.Sprintf("%s:%d", host, overridePort), true
+	}
+	if c != nil {
+		if strings.TrimSpace(c.Dashboard.Addr) != "" {
+			return strings.TrimSpace(c.Dashboard.Addr), true
+		}
+		if c.Dashboard.Port > 0 {
+			return fmt.Sprintf("127.0.0.1:%d", c.Dashboard.Port), true
+		}
+	}
+	return "127.0.0.1:8080", true
 }
 
 func Home() string {

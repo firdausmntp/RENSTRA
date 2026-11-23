@@ -245,7 +245,7 @@ Kendalikan agent secara penuh langsung dari obrolan Telegram pribadimu:
 | Perintah | Deskripsi |
 |---|---|
 | `renstra setup` | Wizard interaktif untuk membuat `config.yaml` dan menyimpan kredensial di `.env` |
-| `renstra serve` | Menjalankan gateway Telegram long polling + cron scheduler + client MCP |
+| `renstra serve [--dashboard-port N]` | Menjalankan gateway Telegram long polling + Web Dashboard (`:8080`) + cron + MCP |
 | `renstra restart [--start]` | Me-restart service systemd atau proses `renstra serve` yang sedang berjalan (jika ada) |
 | `renstra chat [model]` | REPL terminal interaktif dengan live metrics footer, syntax formatting, dan slash commands |
 | `renstra update [check]` | Memeriksa dan memperbarui binary RENSTRA ke versi rilis GitHub terbaru secara in-place |

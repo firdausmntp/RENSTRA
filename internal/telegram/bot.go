@@ -69,6 +69,7 @@ type Bot struct {
 	seenOrder   []int64
 	cancels     map[int64]turnHandle
 	locks       map[int64]*chatLock
+	queued      map[int64]*queuedTurn
 	pending     map[int64]*pendingApproval
 	topicNames  map[int64]string
 	approvalSeq int64
@@ -84,6 +85,12 @@ type turnHandle struct {
 type chatLock struct {
 	mu   sync.Mutex
 	refs int
+}
+
+type queuedTurn struct {
+	texts     []string
+	replyToID int64
+	acked     bool
 }
 
 type pendingApproval struct {
@@ -139,6 +146,7 @@ func New(cfg Config) (*Bot, error) {
 		seen:          map[int64]struct{}{},
 		cancels:       map[int64]turnHandle{},
 		locks:         map[int64]*chatLock{},
+		queued:        map[int64]*queuedTurn{},
 		pending:       map[int64]*pendingApproval{},
 		topicNames:    map[int64]string{},
 	}, nil
@@ -300,8 +308,30 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 	if h == nil {
 		return
 	}
-	unlock := b.lockScope(m.Chat.ID, m.MessageThreadID)
+	if hasAttachment {
+		var ok bool
+		text, ok = b.prepareAttachmentText(ctx, ctx, m, text)
+		if !ok {
+			return
+		}
+	}
+	if m.Chat.Type != "private" || m.MessageThreadID > 0 || m.ReplyToMessage != nil || m.Quote != nil {
+		var ok bool
+		text, ok = b.appendReplyContext(ctx, ctx, m, text)
+		if !ok {
+			return
+		}
+	}
+
+	mergedText, mergedReplyTo, shouldRun, unlock := b.enqueueOrAcquire(ctx, m, text)
+	if !shouldRun {
+		return
+	}
 	defer unlock()
+	text = mergedText
+	if mergedReplyTo > 0 {
+		ctx = withReplyTarget(ctx, mergedReplyTo, m.MessageThreadID)
+	}
 
 	turnCtx, turnCancel := context.WithCancel(ctx)
 	gen := b.RegisterTopicCancel(m.Chat.ID, m.MessageThreadID, turnCancel)
@@ -327,21 +357,6 @@ func (b *Bot) handleMessage(ctx context.Context, h Handler, m message) {
 		}
 	}()
 	defer close(typingDone)
-
-	if hasAttachment {
-		var ok bool
-		text, ok = b.prepareAttachmentText(ctx, turnCtx, m, text)
-		if !ok {
-			return
-		}
-	}
-	if m.Chat.Type != "private" || m.MessageThreadID > 0 || m.ReplyToMessage != nil || m.Quote != nil {
-		var ok bool
-		text, ok = b.appendReplyContext(ctx, turnCtx, m, text)
-		if !ok {
-			return
-		}
-	}
 
 	out, err := h.Handle(turnCtx, m.Chat.ID, text)
 	if err != nil {

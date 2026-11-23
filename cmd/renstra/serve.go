@@ -14,6 +14,7 @@ import (
 	"renstra/internal/agent"
 	"renstra/internal/config"
 	"renstra/internal/cron"
+	"renstra/internal/dashboard"
 	"renstra/internal/mcp"
 	"renstra/internal/memory"
 	"renstra/internal/skill"
@@ -23,8 +24,12 @@ import (
 	"renstra/internal/update"
 )
 
-// serveCmd runs the Telegram gateway + cron runner concurrently.
-func serveCmd() error {
+// serveCmd runs the Telegram gateway + cron runner + web dashboard concurrently.
+func serveCmd(args []string) error {
+	sflags, err := parseServeFlags(args)
+	if err != nil {
+		return err
+	}
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -33,7 +38,8 @@ func serveCmd() error {
 	home := config.Home()
 	cfgPath := filepath.Join(home, "config.yaml")
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logHub := dashboard.NewLogHub(filepath.Join(home, "logs"), 1000, os.Stderr)
+	logger := slog.New(logHub)
 
 	token := cfg.Telegram.Token
 	allowedUsers := append([]int64(nil), cfg.Telegram.AllowedUsers...)
@@ -97,6 +103,7 @@ func serveCmd() error {
 			if handler != nil {
 				modelName = handler.runnerForChat(ectx, cid).GetModel()
 			}
+			logger.Error("telegram_runtime_error", "chat_id", cid, "model", modelName, "error", e.Error())
 			return errLog.recordAndWriteSnapshot(cid, modelName, e)
 		},
 		Transcribe: buildTranscriber(cfg),
@@ -300,6 +307,13 @@ func serveCmd() error {
 		defer cleanupPID()
 	}
 
-	fmt.Printf("renstra gateway berjalan (model: %s). Tekan Ctrl+C untuk berhenti.\n", model)
+	dashAddr := startDashboardServer(ctx, cfg, sflags, home, st, memStore, skillReg, runner, handler, logHub, logger)
+	if dashAddr != "" {
+		handler.dashAddr = dashAddr
+		handler.logHub = logHub
+		fmt.Printf("renstra gateway berjalan (model: %s | dashboard: http://%s). Tekan Ctrl+C untuk berhenti.\n", model, dashAddr)
+	} else {
+		fmt.Printf("renstra gateway berjalan (model: %s). Tekan Ctrl+C untuk berhenti.\n", model)
+	}
 	return bot.Run(ctx, handler)
 }

@@ -43,10 +43,12 @@ func (b *Bot) clearTopicCancel(chatID, threadID, gen int64) {
 func (b *Bot) stopActiveTurn(chatID, threadID int64) bool {
 	key := turnScopeKey(chatID, threadID)
 	b.mu.Lock()
+	delete(b.queued, key)
 	ch, ok := b.cancels[key]
 	if ok {
 		delete(b.cancels, key)
 	} else if threadID > 0 {
+		delete(b.queued, chatID)
 		ch, ok = b.cancels[chatID]
 		if ok {
 			delete(b.cancels, chatID)
@@ -67,8 +69,11 @@ func (b *Bot) handleGenerationStopped(ev messageGenerationStopped) {
 	b.stopActiveTurn(ev.Chat.ID, ev.MessageThreadID)
 }
 
-func (b *Bot) lockScope(chatID, threadID int64) func() {
-	key := turnScopeKey(chatID, threadID)
+// enqueueOrAcquire queues incoming messages while a turn is actively running
+// (Hermes-style coalesced follow-up instead of killing the active turn), then
+// coalesces all queued messages once the lock is acquired.
+func (b *Bot) enqueueOrAcquire(ctx context.Context, m message, text string) (string, int64, bool, func()) {
+	key := turnScopeKey(m.Chat.ID, m.MessageThreadID)
 	b.mu.Lock()
 	l := b.locks[key]
 	if l == nil {
@@ -76,13 +81,35 @@ func (b *Bot) lockScope(chatID, threadID int64) func() {
 		b.locks[key] = l
 	}
 	l.refs++
-	if h, ok := b.cancels[key]; ok && h.cancel != nil {
-		h.cancel()
+
+	_, active := b.cancels[key]
+	sendAck := false
+	if active {
+		if b.queued == nil {
+			b.queued = map[int64]*queuedTurn{}
+		}
+		q := b.queued[key]
+		if q == nil {
+			q = &queuedTurn{}
+			b.queued[key] = q
+		}
+		q.texts = append(q.texts, text)
+		if m.MessageID > 0 {
+			q.replyToID = m.MessageID
+		}
+		if !q.acked {
+			q.acked = true
+			sendAck = true
+		}
 	}
 	b.mu.Unlock()
 
+	if sendAck {
+		go b.reply(ctx, m.Chat.ID, "⏳ Tugas sebelumnya masih berjalan — pesan kamu diantrekan dan akan diproses otomatis setelah selesai (ketik `/stop` untuk membatalkan).")
+	}
+
 	l.mu.Lock()
-	return func() {
+	unlock := func() {
 		l.mu.Unlock()
 		b.mu.Lock()
 		l.refs--
@@ -91,6 +118,21 @@ func (b *Bot) lockScope(chatID, threadID int64) func() {
 		}
 		b.mu.Unlock()
 	}
+
+	if !active {
+		return text, m.MessageID, true, unlock
+	}
+
+	b.mu.Lock()
+	q := b.queued[key]
+	delete(b.queued, key)
+	b.mu.Unlock()
+
+	if q == nil || len(q.texts) == 0 {
+		unlock()
+		return "", 0, false, nil
+	}
+	return strings.Join(q.texts, "\n"), q.replyToID, true, unlock
 }
 
 func (b *Bot) isChatOrUserAllowed(chatID int64, from *tgUser) bool {

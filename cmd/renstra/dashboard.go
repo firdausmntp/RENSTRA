@@ -1,0 +1,238 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"renstra/internal/agent"
+	"renstra/internal/config"
+	"renstra/internal/dashboard"
+	"renstra/internal/memory"
+	"renstra/internal/skill"
+	"renstra/internal/store"
+
+	"os/signal"
+	"path/filepath"
+	"syscall"
+)
+
+type serveFlags struct {
+	DashPort int
+	DashAddr string
+	NoDash   bool
+}
+
+func parseServeFlags(args []string) (serveFlags, error) {
+	var f serveFlags
+	if p := strings.TrimSpace(os.Getenv("RENSTRA_DASHBOARD_PORT")); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 {
+			f.DashPort = n
+		}
+	}
+	if a := strings.TrimSpace(os.Getenv("RENSTRA_DASHBOARD_ADDR")); a != "" {
+		f.DashAddr = a
+	}
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--no-dashboard":
+			f.NoDash = true
+		case args[i] == "--dashboard-port" && i+1 < len(args):
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				return f, fmt.Errorf("--dashboard-port tidak valid: %q", args[i])
+			}
+			f.DashPort = n
+		case strings.HasPrefix(args[i], "--dashboard-port="):
+			val := strings.TrimPrefix(args[i], "--dashboard-port=")
+			n, err := strconv.Atoi(val)
+			if err != nil || n <= 0 || n > 65535 {
+				return f, fmt.Errorf("--dashboard-port tidak valid: %q", val)
+			}
+			f.DashPort = n
+		case args[i] == "--dashboard-addr" && i+1 < len(args):
+			i++
+			f.DashAddr = args[i]
+		case strings.HasPrefix(args[i], "--dashboard-addr="):
+			f.DashAddr = strings.TrimPrefix(args[i], "--dashboard-addr=")
+		default:
+			return f, fmt.Errorf("flag tidak dikenal pada serve: %s", args[i])
+		}
+	}
+	return f, nil
+}
+
+func startDashboardServer(ctx context.Context, cfg *config.Config, flags serveFlags, home string, st *store.Store, mem *memory.Store, skills *skill.Registry, runner *agent.Runner, handler *telegramHandler, logHub *dashboard.LogHub, logger *slog.Logger) string {
+	if flags.NoDash {
+		return ""
+	}
+	addr, enabled := cfg.DashboardListenAddr(flags.DashPort, flags.DashAddr)
+	if !enabled || addr == "" {
+		return ""
+	}
+	token := strings.TrimSpace(cfg.Dashboard.Token)
+	if envTok := strings.TrimSpace(os.Getenv("RENSTRA_DASHBOARD_TOKEN")); envTok != "" {
+		token = envTok
+	}
+	if token == "" && !strings.HasPrefix(addr, "127.0.0.1:") && !strings.HasPrefix(addr, "localhost:") && !strings.HasPrefix(addr, "[::1]:") {
+		logger.Warn("dashboard_public_without_token", "addr", addr, "hint", "set dashboard.token di config.yaml atau RENSTRA_DASHBOARD_TOKEN agar akses VPS aman")
+	}
+
+	srv, err := dashboard.New(dashboard.Options{
+		Addr:      addr,
+		Token:     token,
+		Version:   version,
+		HomeDir:   home,
+		Store:     st,
+		Memory:    mem,
+		Skills:    skills,
+		Config:    cfg,
+		LogHub:    logHub,
+		StartedAt: time.Now(),
+		GetActiveModel: func() string {
+			return runner.GetModel()
+		},
+		GetProviderKind: func() string {
+			if pcfg, _, err := config.Resolve(cfg.DefaultModel, cfg); err == nil && pcfg.Kind != "" {
+				return pcfg.Kind
+			}
+			return "openai"
+		},
+		GetContextWindow: func() int {
+			return runner.ContextWindow
+		},
+		GetFallbackStatus: func() []dashboard.FallbackStatusItem {
+			items := runner.FallbackStatus()
+			out := make([]dashboard.FallbackStatusItem, 0, len(items))
+			for _, it := range items {
+				cd := ""
+				if it.CooldownLeft > 0 {
+					cd = it.CooldownLeft.Truncate(time.Second).String()
+				}
+				out = append(out, dashboard.FallbackStatusItem{
+					Provider:      it.Provider,
+					Model:         it.Model,
+					Failures:      it.Failures,
+					CooldownLeft:  cd,
+					LastError:     it.LastError,
+					LastKind:      string(it.LastKind),
+					ContextWindow: it.ContextWindow,
+					Vision:        it.Vision,
+				})
+			}
+			return out
+		},
+		ResetFallbacks: func() {
+			runner.ResetFallbacks()
+		},
+		InvalidatePrompts: func() {
+			handler.invalidateAllPrompts()
+		},
+		SetDefaultModelRun: func(ref string) error {
+			return modelSetCmd(ref)
+		},
+		ReloadConfig: func(updated *config.Config) {
+			handler.cfg = updated
+			runner.Fallbacks = buildFallbacks(updated)
+		},
+	})
+	if err != nil {
+		logger.Error("dashboard_init_failed", "addr", addr, "error", err.Error())
+		return ""
+	}
+	go func() {
+		if err := srv.Run(ctx); err != nil {
+			logger.Error("dashboard_stopped", "addr", addr, "error", err.Error())
+		}
+	}()
+	logger.Info("dashboard_started", "addr", addr, "auth", token != "")
+	return addr
+}
+
+// dashboardCmd runs the Web Dashboard standalone without requiring a Telegram bot token.
+func dashboardCmd(args []string) error {
+	var flags serveFlags
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--port" && i+1 < len(args), args[i] == "--dashboard-port" && i+1 < len(args):
+			i++
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("port tidak valid: %q", args[i])
+			}
+			flags.DashPort = n
+		case strings.HasPrefix(args[i], "--port="):
+			n, err := strconv.Atoi(strings.TrimPrefix(args[i], "--port="))
+			if err != nil || n <= 0 || n > 65535 {
+				return fmt.Errorf("port tidak valid")
+			}
+			flags.DashPort = n
+		case args[i] == "--addr" && i+1 < len(args), args[i] == "--dashboard-addr" && i+1 < len(args):
+			i++
+			flags.DashAddr = args[i]
+		default:
+			return fmt.Errorf("flag tidak dikenal: %s", args[i])
+		}
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	home := config.Home()
+	workspace := filepath.Join(home, "workspace")
+	_ = os.MkdirAll(workspace, 0o755)
+	st, err := store.Open(filepath.Join(home, "state.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	memStore, _ := memory.Open(filepath.Join(home, "memory"))
+	skillReg, _ := skill.Load(
+		skill.Layer{Dir: filepath.Join(workspace, ".skills"), Writable: false},
+		skill.Layer{Dir: filepath.Join(workspace, "skills"), Writable: false},
+		skill.Layer{Dir: filepath.Join(home, "skills"), Writable: true},
+		skill.Layer{Dir: filepath.Join(globalBaseDir(), "skills"), Writable: false},
+	)
+
+	logHub := dashboard.NewLogHub(filepath.Join(home, "logs"), 1000, os.Stderr)
+	logger := slog.New(logHub)
+	logger.Info("dashboard_standalone_ready", "version", version, "home", home)
+
+	addr, _ := cfg.DashboardListenAddr(flags.DashPort, flags.DashAddr)
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
+	srv, err := dashboard.New(dashboard.Options{
+		Addr:             addr,
+		Token:            strings.TrimSpace(cfg.Dashboard.Token),
+		Version:          version,
+		HomeDir:          home,
+		Store:            st,
+		Memory:           memStore,
+		Skills:           skillReg,
+		Config:           cfg,
+		LogHub:           logHub,
+		StartedAt:        time.Now(),
+		GetActiveModel:   func() string { return cfg.DefaultModel },
+		GetProviderKind:  func() string { return "standalone" },
+		GetContextWindow: func() int { return 128000 },
+		SetDefaultModelRun: func(ref string) error {
+			return modelSetCmd(ref)
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	fmt.Printf("RENSTRA Web Dashboard berjalan di http://%s (Ctrl+C untuk berhenti)\n", addr)
+	return srv.Run(ctx)
+}

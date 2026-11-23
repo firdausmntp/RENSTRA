@@ -4,6 +4,23 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.3.0 (Web Dashboard Control Plane, Live SSE Logs, Skills Studio & Memory/Account Manager)
+
+- [x] **Web Dashboard Single-Binary (`embed`) dengan Port & Token Konfigurabel**
+  - **Lokasi:** [`internal/dashboard/server.go`](internal/dashboard/server.go), [`internal/dashboard/api_manage.go`](internal/dashboard/api_manage.go), [`internal/dashboard/ui/`](internal/dashboard/ui/index.html), [`internal/config/config.go`](internal/config/config.go), [`cmd/renstra/dashboard.go`](cmd/renstra/dashboard.go)
+  - **Fitur:** Dashboard UI gelap modern tersemat langsung di binary Go (tanpa dependensi eksternal), port dapat diatur lewat `config.yaml` (`dashboard.addr` / `dashboard.port`), flag `--dashboard-port` / `--dashboard-addr` / `--no-dashboard`, atau env `RENSTRA_DASHBOARD_*`, lengkap dengan autentikasi Bearer token opsional (`dashboard.token`) dan perintah Telegram `/dashboard`.
+- [x] **Live Log Hub (`slog.Handler` + SSE Real-Time + Persistent File Log)**
+  - **Lokasi:** [`internal/dashboard/loghub.go`](internal/dashboard/loghub.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go), [`internal/store/dashboard.go`](internal/store/dashboard.go)
+  - **Fitur:** Menangkap seluruh event terstruktur (`INFO`, `WARN`, `ERROR`, runtime error Telegram, tool approval, smart fallback, retry) ke ring buffer in-memory, file `$RENSTRA_HOME/logs/renstra.log`, dan live stream SSE `/api/logs/stream` dengan sensor secret otomatis serta tabel trace Turns terbaru.
+- [x] **Kelola Skills, Memory/SOUL, Multi-Akun, Model & Cron dari Browser (+ SPA Routes & Full CRUD)**
+  - **Lokasi:** [`internal/dashboard/api_manage.go`](internal/dashboard/api_manage.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`internal/dashboard/ui/js/`](internal/dashboard/ui/js/app.js)
+  - **Fitur:** SPA routes per tab (`/overview`, `/logs`, `/skills`, `/memory`, `/accounts`, `/cron`), Skills Studio (`SKILL.md` CRUD + reload), editor `SOUL.md`/`MEMORY.md`/`USER.md` (+ clear & quota limit), manajer multi-akun & model CRUD, reset circuit breaker, Cron CRUD + inspeksi transkrip & reset sesi, download log `.jsonl`, warning keamanan jika bind publik tanpa token, serta UI responsif Tablet & Mobile drawer.
+- [x] **`/model <id> --global` & Antrean Pesan Coalesced Saat Thinking Ala Hermes**
+  - **Lokasi:** [`cmd/renstra/telegram_group.go`](cmd/renstra/telegram_group.go), [`cmd/renstra/main.go`](cmd/renstra/main.go), [`internal/telegram/group.go`](internal/telegram/group.go), [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/store/dashboard.go`](internal/store/dashboard.go)
+  - **Fitur:** `/model <id> --global` mengubah model aktif di seluruh sesi, grup, dan topik serentak; pesan baru yang masuk saat bot sedang *thinking*/menjalankan tool tidak lagi membatalkan tugas berjalan, melainkan diantrekan dan digabung otomatis setelah tugas aktif selesai (tetap bisa dibatalkan instan dengan `/stop`).
+
+---
+
 ## Rilis v1.2.8 (Anti-Lone-`>` Streaming, `send_telegram` Cross-Topic, Empty-Response Retry & Informative Tool/Turn Timeout)
 
 - [x] **Anti-Lone-`>` Streaming Draft & Fallback Finalize**

@@ -184,7 +184,14 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.2.8)
+## 7. Status Rilis & Pengembangan (v1.3.0)
+
+Fitur & pembaruan v1.3.0:
+1. **Web Dashboard Control Plane & Live Log Hub (`internal/dashboard`):** Dashboard web single-binary (`embed`) dengan port & bearer token konfigurabel (`dashboard.*` / `--dashboard-port` / `renstra dashboard`), SPA routes (`/overview`, `/logs`, `/skills`, `/memory`, `/accounts`, `/cron`), full CRUD (Skills Studio, `SOUL.md`/`MEMORY.md`/`USER.md`, Multi-Akun & Model, Cron, Turns, Transkrip Sesi), Live SSE Logs + Download `.jsonl`, serta desain modular responsif Desktop/Tablet/Mobile.
+2. **`/model <id> --global`:** Mengubah `default_model` sekaligus menyelaraskan seluruh sesi chat/grup/topik aktif di memori dan SQLite (`SetGlobalModel`).
+3. **Antrean Pesan Coalesced Saat Thinking (Hermes-Style):** Pesan baru yang masuk saat bot sedang berpikir/menjalankan tool di Telegram otomatis diantrekan dan digabung (`enqueueOrAcquire`) tanpa membatalkan tugas berjalan; `/stop` tetap membatalkan secara instan.
+
+Fitur v1.2.8 sebelumnya:
 
 Fitur & perbaikan v1.2.8:
 1. **Anti-Lone-`>` Streaming & Fallback Finalize:** Menahan flush token awal yang hanya berisi simbol/prefix markdown (seperti `>` tunggal pada blockquote) hingga ada konten bermakna (`hasMeaningfulStreamText`), serta fallback `SendMessage` jika `EditMessage` saat `Finalize` gagal.

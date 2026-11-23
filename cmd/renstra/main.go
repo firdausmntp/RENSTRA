@@ -20,7 +20,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.2.8"
+var version = "v1.3.0"
 
 func main() {
 	if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {
@@ -37,7 +37,12 @@ func main() {
 			os.Exit(1)
 		}
 	case "serve":
-		if err := serveCmd(); err != nil {
+		if err := serveCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "dashboard":
+		if err := dashboardCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -284,6 +289,10 @@ func chatCmd(args []string) error {
 			r.Approve = cli.ApproverFrom(rd, os.Stdout)
 		},
 		SwitchModel: func(ref string) (string, error) {
+			cleaned, isGlobal := parseGlobalModelFlag(strings.TrimSpace(ref))
+			if isGlobal {
+				ref = cleaned
+			}
 			trimmed := strings.TrimSpace(ref)
 			if strings.EqualFold(trimmed, "add") || strings.HasPrefix(strings.ToLower(trimmed), "add ") {
 				fields := strings.Fields(strings.TrimSpace(trimmed[len("add"):]))
@@ -320,6 +329,14 @@ func chatCmd(args []string) error {
 			nextMC := nextPCfg.ModelConfig(nextModel)
 			r.SetModel(nextProv, nextModel, nextMC.MaxOutput, nextMC.Context, nextMC.PriceIn, nextMC.PriceOut)
 			r.SetCapabilities(nextMC.Vision, nextMC.Tools != nil && !*nextMC.Tools)
+			if isGlobal {
+				_, storedRef, _ := config.SetDefaultModel(ref)
+				if storedRef != "" {
+					cfg.DefaultModel = storedRef
+					_ = st.SetGlobalModel(context.Background(), storedRef)
+				}
+				return fmt.Sprintf("🌐 Model global diubah ke: %s (semua sesi & default)", nextModel), nil
+			}
 			_ = st.SetChatModel(context.Background(), 1, ref)
 			return fmt.Sprintf("Model aktif diganti ke: %s", nextModel), nil
 		},
