@@ -184,9 +184,9 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.3.0-beta)
+## 7. Status Rilis & Pengembangan (v1.3.1)
 
-Fitur & pembaruan v1.3.0-beta:
+Fitur & pembaruan v1.3.1:
 1. **3-Layer Hybrid UI Loader & GitHub Hot-Sync (`internal/dashboard/uisync.go`):** Resolusi UI berlapis (`override` -> `cache` -> `embed`) dengan pengecekan kompatibilitas `manifest.json` (`min_api_version`/`max_api_version`), tombol `Sync UI` (`POST /api/ui/sync` & `POST /api/ui/reset`), dan `Cache-Control: no-cache`.
 2. **Light Theme Default, Logs Beautifier, Skills Pagination & Desktop Drawer Fix:** Tema putih bersih sebagai default + toggle Dark, chip log terstruktur tanpa `error=""` kosong, paginasi Skills `12/halaman` + filter status, serta penyembunyian tombol hamburger/drawer di desktop.
 3. **Akurasi Model, Context Window >32k & Vision Model Kustom:** Fallback `DefaultModelConfig` dinaikkan ke `128k` + `Vision: true` (`1M` untuk `gemini-3/4`, `200k` untuk `claude-*`), pewarisan `vision` saat tidak ditulis di `config.yaml` (`ModelConfig.UnmarshalYAML`), deduplikasi + `model_details` di tab Accounts & Models, serta sinkronisasi live global model dari dashboard.

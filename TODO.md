@@ -4,7 +4,7 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
-## Rilis v1.3.0-beta (Hybrid GitHub UI Hot-Sync, Light Theme Default, Logs Beautifier, Skills Pagination, Model/Context & Vision Fix)
+## Rilis v1.3.1 (Hybrid GitHub UI Hot-Sync, Light Theme Default, Logs Beautifier, Skills Pagination, Model/Context & Vision Fix)
 
 - [x] **3-Layer Hybrid UI Loader & GitHub Hot-Sync**
   - **Lokasi:** [`internal/dashboard/uisync.go`](internal/dashboard/uisync.go), [`internal/dashboard/server.go`](internal/dashboard/server.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`internal/config/config.go`](internal/config/config.go), [`internal/dashboard/ui/manifest.json`](internal/dashboard/ui/manifest.json)
