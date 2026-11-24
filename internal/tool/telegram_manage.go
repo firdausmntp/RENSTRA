@@ -21,6 +21,7 @@ type TelegramManager interface {
 	EditFormattedMessage(ctx context.Context, chatID, messageID int64, markdown string) error
 	PinMessage(ctx context.Context, chatID, messageID int64, disableNotification bool) error
 	UnpinMessage(ctx context.Context, chatID, messageID int64) error
+	ReactMessage(ctx context.Context, chatID, messageID int64, emoji string) error
 }
 
 // TelegramManage lets the agent create, rename, close, reopen, delete, and list
@@ -36,11 +37,11 @@ func NewTelegramManage(mgr TelegramManager) *TelegramManage {
 func (t *TelegramManage) Name() string { return "telegram_manage" }
 
 func (t *TelegramManage) Description() string {
-	return "Kelola topik forum dan pesan Telegram: list_topics, create_topic, rename_topic, close_topic, reopen_topic, delete_topic, delete_message, edit_message, pin_message, unpin_message."
+	return "Kelola topik forum dan pesan Telegram: list_topics, create_topic, rename_topic, close_topic, reopen_topic, delete_topic, delete_message, edit_message, pin_message, unpin_message, react_message."
 }
 
 func (t *TelegramManage) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list_topics","create_topic","rename_topic","close_topic","reopen_topic","delete_topic","delete_message","edit_message","pin_message","unpin_message"]},"chat_id":{"type":"integer","description":"ID chat/grup tujuan (opsional, default chat saat ini)"},"topic_id":{"type":"integer","description":"ID topik forum (message_thread_id)"},"message_id":{"type":"integer","description":"ID pesan target"},"name":{"type":"string","description":"nama topik baru"},"text":{"type":"string","description":"teks Markdown baru untuk edit_message"},"silent":{"type":"boolean","description":"pin tanpa notifikasi"}},"required":["action"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"action":{"type":"string","enum":["list_topics","create_topic","rename_topic","close_topic","reopen_topic","delete_topic","delete_message","edit_message","pin_message","unpin_message","react_message"]},"chat_id":{"type":"integer","description":"ID chat/grup tujuan (opsional, default chat saat ini)"},"topic_id":{"type":"integer","description":"ID topik forum (message_thread_id)"},"message_id":{"type":"integer","description":"ID pesan target"},"name":{"type":"string","description":"nama topik baru"},"text":{"type":"string","description":"teks Markdown baru untuk edit_message"},"emoji":{"type":"string","description":"emoji reaksi untuk react_message (mis. 👍, 🔥, ❤️, 👀)"},"silent":{"type":"boolean","description":"pin tanpa notifikasi"}},"required":["action"]}`)
 }
 
 func (t *TelegramManage) Danger() bool { return false }
@@ -56,6 +57,7 @@ func (t *TelegramManage) Execute(ctx context.Context, raw json.RawMessage) (stri
 		MessageID int64  `json:"message_id"`
 		Name      string `json:"name"`
 		Text      string `json:"text"`
+		Emoji     string `json:"emoji"`
 		Silent    bool   `json:"silent"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -135,6 +137,11 @@ func (t *TelegramManage) Execute(ctx context.Context, raw json.RawMessage) (stri
 			return "", err
 		}
 		return fmt.Sprintf("pesan %d di-unpin", in.MessageID), nil
+	case "react_message":
+		if err := t.mgr.ReactMessage(ctx, targetChat, in.MessageID, in.Emoji); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("reaksi %q dikirim ke pesan %d", strings.TrimSpace(in.Emoji), in.MessageID), nil
 	default:
 		return "", fmt.Errorf("action tidak dikenal: %q", in.Action)
 	}

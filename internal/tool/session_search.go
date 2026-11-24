@@ -23,7 +23,7 @@ func NewSessionSearch(s *store.Store) *SessionSearch {
 func (t *SessionSearch) Name() string { return "session_search" }
 
 func (t *SessionSearch) Description() string {
-	return "Mencari percakapan lama di chat ini berdasarkan kata kunci. Berguna untuk mengingat detail, konfigurasi, atau diskusi masa lalu yang sudah terpotong dari jendela konteks aktif."
+	return "Mencari percakapan lama secara semantik/hybrid (BM25 + kemiripan kata) di chat ini atau seluruh sesi. Berguna untuk mengingat detail, konfigurasi, atau diskusi masa lalu yang sudah terpotong dari konteks aktif."
 }
 
 func (t *SessionSearch) Schema() json.RawMessage {
@@ -32,11 +32,15 @@ func (t *SessionSearch) Schema() json.RawMessage {
 		"properties": {
 			"query": {
 				"type": "string",
-				"description": "Kata kunci atau frasa yang dicari"
+				"description": "Kata kunci, topik, atau deskripsi yang dicari"
 			},
 			"limit": {
 				"type": "integer",
 				"description": "Maksimal pesan yang dikembalikan (default 5, max 20)"
+			},
+			"all_chats": {
+				"type": "boolean",
+				"description": "Jika true, cari di seluruh sesi/topik dalam database, bukan hanya chat saat ini"
 			}
 		},
 		"required": ["query"]
@@ -51,15 +55,16 @@ func (t *SessionSearch) Execute(ctx context.Context, raw json.RawMessage) (strin
 	}
 
 	var in struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query    string `json:"query"`
+		Limit    int    `json:"limit"`
+		AllChats bool   `json:"all_chats"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return "", fmt.Errorf("argumen session_search tidak valid: %w", err)
 	}
 
 	chatID := ChatIDFrom(ctx)
-	msgs, err := t.store.SearchMessages(ctx, chatID, in.Query, in.Limit)
+	msgs, err := t.store.SearchMessagesRanked(ctx, chatID, in.Query, in.Limit, in.AllChats)
 	if err != nil {
 		return "", err
 	}

@@ -119,6 +119,7 @@ func serveCmd(args []string) error {
 	if savedTopics, err := st.LoadAllChatTopics(ctx); err == nil {
 		bot.SeedTopics(savedTopics)
 	}
+	bot.SeedHarvestedTopics(st.HarvestTopicsFromHistory(ctx))
 	for _, id := range recentIDs {
 		bot.MarkSeen(id)
 	}

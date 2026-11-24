@@ -3,9 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strconv"
-	"strings"
 
 	"renstra/internal/provider"
 )
@@ -143,50 +141,8 @@ func (s *Store) SessionBreak(ctx context.Context, chatID int64) error {
 	return err
 }
 
-// SearchMessages finds past user/assistant messages in one chat by keyword.
-// It searches the full transcript, including rows already compacted out of the
-// live context, so the agent can recall details that compression dropped.
+// SearchMessages finds past user/assistant messages in one chat using hybrid
+// BM25 + trigram/prefix semantic ranking across compacted and live history.
 func (s *Store) SearchMessages(ctx context.Context, chatID int64, query string, limit int) ([]provider.Message, error) {
-	q := strings.TrimSpace(query)
-	if q == "" {
-		return nil, errors.New("query pencarian kosong")
-	}
-	if limit <= 0 || limit > 50 {
-		limit = 10
-	}
-
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT role, content FROM messages
-		  WHERE chat_id = ? AND role IN ('user','assistant')
-		    AND content LIKE ? ESCAPE '\'
-		  ORDER BY id DESC LIMIT ?`,
-		chatID, "%"+escapeLike(q)+"%", limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var out []provider.Message
-	for rows.Next() {
-		var m provider.Message
-		if err := rows.Scan(&m.Role, &m.Content); err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	// Oldest first reads more naturally in the tool result.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
-	return out, nil
-}
-
-// escapeLike neutralizes LIKE wildcards so a query containing % or _ matches
-// literally instead of scanning everything.
-func escapeLike(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
-	return r.Replace(s)
+	return s.SearchMessagesRanked(ctx, chatID, query, limit, false)
 }

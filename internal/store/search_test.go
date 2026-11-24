@@ -68,4 +68,37 @@ func TestSearchMessagesFindsCompactedAndLive(t *testing.T) {
 	if len(wildcardResults) != 0 {
 		t.Fatalf("query %% tidak boleh mencocokkan jika tidak ada karakter %% literal, got %d", len(wildcardResults))
 	}
+
+	// Semantic / non-contiguous multi-word + morphological match
+	semResults, err := st.SearchMessagesRanked(ctx, 42, "konfigurasi port database redis", 2, false)
+	if err != nil {
+		t.Fatalf("SearchMessagesRanked: %v", err)
+	}
+	if len(semResults) == 0 || !strings.Contains(semResults[0].Content, "6389") {
+		t.Fatalf("expected semantic match for redis port 6389, got %+v", semResults)
+	}
+
+	// Cross-chat search
+	if _, err := st.AppendMessage(ctx, 99, provider.Message{Role: provider.RoleUser, Content: "menghapus container nginx lama"}); err != nil {
+		t.Fatal(err)
+	}
+	cross, err := st.SearchMessagesRanked(ctx, 42, "hapus nginx", 3, true)
+	if err != nil {
+		t.Fatalf("cross-chat SearchMessagesRanked: %v", err)
+	}
+	if len(cross) == 0 || !strings.Contains(cross[0].Content, "nginx") {
+		t.Fatalf("expected cross-chat morphological match for nginx, got %+v", cross)
+	}
+
+	// Historical topic harvesting from stored message headers
+	if _, err := st.AppendMessage(ctx, 100, provider.Message{
+		Role:    provider.RoleUser,
+		Content: `[Grup: "Infra" | Topik: "Deployment" (#404) | Pengirim: @firdaus]` + "\ncek status",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	harvested := st.HarvestTopicsFromHistory(ctx)
+	if harvested[404] != "Deployment" {
+		t.Fatalf("expected harvested topic 404=Deployment, got %+v", harvested)
+	}
 }

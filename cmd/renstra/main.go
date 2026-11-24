@@ -20,7 +20,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.3.2"
+var version = "v1.3.5"
 
 func main() {
 	if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {
@@ -92,6 +92,16 @@ func main() {
 		configCmd(args[1:])
 	case "migrate":
 		if err := migrateCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "backup":
+		if err := backupCmd(args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "restore":
+		if err := restoreCmd(args[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}

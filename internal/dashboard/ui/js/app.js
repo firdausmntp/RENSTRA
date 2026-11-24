@@ -1,8 +1,8 @@
-import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.3.2';
+import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.3.5';
 import {
   loadOverview, loadLogs, renderLogs,
-  loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions
-} from './views.js?v=1.3.2';
+  loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions, loadChatPlayground
+} from './views.js?v=1.3.5';
 
 function openDrawer(open) {
   $('#sidebar').classList.toggle('open', open);
@@ -19,7 +19,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') openDrawer(false);
 });
 
-const ROUTES = ['overview', 'logs', 'skills', 'memory', 'accounts', 'cron'];
+const ROUTES = ['overview', 'logs', 'skills', 'memory', 'accounts', 'cron', 'chat'];
 
 function activateTab(tab, push = true) {
   if (!ROUTES.includes(tab)) tab = 'overview';
@@ -51,6 +51,7 @@ async function refreshActiveTab() {
     else if (state.tab === 'memory') await loadMemory();
     else if (state.tab === 'accounts') await loadAccounts();
     else if (state.tab === 'cron') await loadCronAndSessions();
+    else if (state.tab === 'chat') await loadChatPlayground();
   } catch (e) {
     if (e.message !== 'Unauthorized') toast('Error: ' + e.message);
   }
@@ -254,11 +255,28 @@ $('#btn-del-model').addEventListener('click', async () => {
 });
 $('#form-model-add').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fd = Object.fromEntries(new FormData(e.target).entries());
-  await api('/api/models/add', { method: 'POST', body: JSON.stringify(fd) });
+  const fd = new FormData(e.target);
+  const payload = Object.fromEntries(fd.entries());
+  payload.vision = fd.get('vision') === 'on';
+  const res = await api('/api/models/add', { method: 'POST', body: JSON.stringify(payload) });
   e.target.reset();
-  toast('Model registered');
+  toast(`${res.count || 1} model(s) registered`);
   await loadAccounts();
+});
+$('#models-detail-list')?.addEventListener('click', async (e) => {
+  const useRef = e.target.dataset.useModel;
+  if (useRef) {
+    await api('/api/model/default', { method: 'POST', body: JSON.stringify({ ref: useRef }) });
+    toast(`Active model: ${useRef}`);
+    await Promise.all([loadAccounts(), loadOverview()]);
+    return;
+  }
+  const delRef = e.target.dataset.delModel;
+  if (delRef && confirm(`Delete model "${delRef}"?`)) {
+    await api('/api/models/delete', { method: 'POST', body: JSON.stringify({ ref: delRef }) });
+    toast('Model removed');
+    await loadAccounts();
+  }
 });
 
 function openCronModal(job) {
@@ -340,6 +358,74 @@ $('#sessions-body').addEventListener('click', async (e) => {
 });
 
 $('#btn-refresh').addEventListener('click', refreshActiveTab);
+$('#form-mcp-add')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const payload = Object.fromEntries(new FormData(e.target).entries());
+  await api('/api/mcp/save', { method: 'POST', body: JSON.stringify(payload) });
+  e.target.reset();
+  toast('MCP server saved to mcp.yaml');
+  await loadSkills();
+});
+$('#mcp-list')?.addEventListener('click', async (e) => {
+  const name = e.target.dataset.delMcp;
+  if (name && confirm(`Remove MCP server "${name}"?`)) {
+    await api('/api/mcp/delete', { method: 'POST', body: JSON.stringify({ name }) });
+    toast('MCP server removed');
+    await loadSkills();
+  }
+});
+$('#btn-backup')?.addEventListener('click', () => {
+  const url = state.token ? `/api/backup?token=${encodeURIComponent(state.token)}` : '/api/backup';
+  window.location.href = url;
+});
+$('#btn-restore')?.addEventListener('click', () => $('#inp-restore-file')?.click());
+$('#inp-restore-file')?.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  if (!confirm(`Restore backup from "${file.name}"?`)) {
+    e.target.value = '';
+    return;
+  }
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const headers = state.token ? { Authorization: `Bearer ${state.token}` } : {};
+    const res = await fetch('/api/restore', { method: 'POST', headers, body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Restore failed');
+    toast(`Restored ${data.count || 0} files`);
+    await refreshActiveTab();
+  } catch (err) {
+    toast('Restore error: ' + err.message);
+  } finally {
+    e.target.value = '';
+  }
+});
+$('#btn-chat-load')?.addEventListener('click', loadChatPlayground);
+$('#btn-chat-clear')?.addEventListener('click', async () => {
+  const cid = Number($('#chat-pg-id')?.value || 1) || 1;
+  if (!confirm(`Reset session ${cid}?`)) return;
+  await api('/api/sessions/clear', { method: 'POST', body: JSON.stringify({ chat_id: cid }) });
+  toast(`Session ${cid} cleared`);
+  await loadChatPlayground();
+});
+$('#form-chat-pg')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const cid = Number($('#chat-pg-id')?.value || 1) || 1;
+  const inp = $('#chat-pg-input');
+  const prompt = inp.value.trim();
+  if (!prompt) return;
+  inp.value = '';
+  $('#btn-chat-send').disabled = true;
+  $('#chat-pg-status').textContent = 'Thinking...';
+  try {
+    await api('/api/chat', { method: 'POST', body: JSON.stringify({ chat_id: cid, prompt }) });
+    await loadChatPlayground();
+  } finally {
+    $('#btn-chat-send').disabled = false;
+    $('#chat-pg-status').textContent = 'Ready';
+  }
+});
 $('#btn-logout')?.addEventListener('click', () => {
   state.token = '';
   localStorage.removeItem('renstra_dash_token');

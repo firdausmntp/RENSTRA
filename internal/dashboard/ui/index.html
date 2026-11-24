@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RENSTRA Control Plane</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.3.2" />
-  <link rel="stylesheet" href="/styles/layout.css?v=1.3.2" />
-  <link rel="stylesheet" href="/styles/components.css?v=1.3.2" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.3.5" />
+  <link rel="stylesheet" href="/styles/layout.css?v=1.3.5" />
+  <link rel="stylesheet" href="/styles/components.css?v=1.3.5" />
 </head>
 <body>
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
@@ -64,6 +64,12 @@
             Cron &amp; Sessions
           </span>
         </button>
+        <button class="nav-btn" data-tab="chat">
+          <span class="nav-lbl">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 3.5h11v7.5H6l-3.5 2.5z"/></svg>
+            Chat Playground
+          </span>
+        </button>
       </nav>
 
       <div class="sidebar-footer">
@@ -90,6 +96,15 @@
           <span class="chip mono" id="top-model">model: -</span>
         </div>
         <div class="topbar-actions">
+          <input type="file" id="inp-restore-file" accept=".tar.gz,.tgz,application/gzip" class="hidden" />
+          <button class="btn btn-ghost btn-ico" id="btn-restore" title="Restore Backup tar.gz">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.5v-8M5 5.5l3-3 3 3M3 13h10"/></svg>
+            Restore
+          </button>
+          <button class="btn btn-ghost btn-ico" id="btn-backup" title="Download tar.gz Backup (DB + Config + Memory + Skills)">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13h10"/></svg>
+            Backup
+          </button>
           <button class="btn btn-ghost btn-ico" id="btn-refresh">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.7M13.5 2.5v3h-3"/></svg>
             Refresh
@@ -188,6 +203,22 @@
             </div>
           </div>
         </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>MCP Servers (mcp.yaml)</h2></div>
+            <div id="mcp-list" class="list-box"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2>Add or Update MCP Server</h2></div>
+            <form id="form-mcp-add" class="form-stack">
+              <label>Server Name <input class="input mono" name="name" placeholder="e.g. playwright" required /></label>
+              <label>Stdio Command (optional if using URL) <input class="input mono" name="command" placeholder="e.g. npx" /></label>
+              <label>Command Args (space-separated) <input class="input mono" name="args" placeholder="e.g. -y @playwright/mcp@latest" /></label>
+              <label>HTTP/SSE URL (optional) <input class="input mono" name="url" placeholder="e.g. http://127.0.0.1:8931/sse" /></label>
+              <button class="btn btn-sm btn-primary" type="submit">Save MCP Server</button>
+            </form>
+          </div>
+        </div>
       </section>
 
       <section class="tab-panel" id="tab-memory">
@@ -264,11 +295,13 @@
               <button class="btn btn-sm btn-danger" id="btn-del-model">Delete</button>
             </div>
             <form id="form-model-add" class="form-stack">
-              <div class="card-head"><h2>Register New Model</h2></div>
-              <label>Model ID <input class="input mono" name="model" placeholder="e.g. claude-3-7-sonnet" required /></label>
-              <label>Provider <input class="input mono" name="provider" placeholder="e.g. anthropic" /></label>
-              <label>Context Window <input class="input mono" name="context" placeholder="e.g. 200k" /></label>
-              <button class="btn btn-sm btn-ghost" type="submit">Add Model</button>
+              <div class="card-head"><h2>Register Model(s) to Provider</h2></div>
+              <label>Model ID(s) (bisa banyak, pisah koma) <input class="input mono" name="model" placeholder="e.g. v4, v6, claude-3-7-sonnet" required /></label>
+              <label>Provider <input class="input mono" name="provider" list="provider-names-list" placeholder="e.g. utama / anthropic" /></label>
+              <datalist id="provider-names-list"></datalist>
+              <label>Context Window <input class="input mono" name="context" placeholder="e.g. 128k / 200k / 1M" /></label>
+              <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" checked /> Support Vision (gambar)</label>
+              <button class="btn btn-sm btn-ghost" type="submit">Add Model(s)</button>
             </form>
           </div>
         </div>
@@ -297,6 +330,24 @@
               </table>
             </div>
           </div>
+        </div>
+      </section>
+
+      <section class="tab-panel" id="tab-chat">
+        <div class="card">
+          <div class="toolbar">
+            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Session ID
+              <input class="input mono" type="number" id="chat-pg-id" value="1" style="width:120px;" />
+            </label>
+            <button class="btn btn-sm btn-ghost" id="btn-chat-load" type="button">Load History</button>
+            <button class="btn btn-sm btn-danger" id="btn-chat-clear" type="button">Clear Session</button>
+            <span class="muted mono" id="chat-pg-status" style="margin-left:auto;">Ready</span>
+          </div>
+          <div id="chat-pg-messages" class="list-box" style="height:52vh;overflow-y:auto;padding:8px 0;"></div>
+          <form id="form-chat-pg" style="display:flex;gap:8px;margin-top:8px;">
+            <input class="input" id="chat-pg-input" placeholder="Ketik pesan atau /command untuk test agent langsung dari browser..." required style="flex:1;" />
+            <button class="btn btn-primary" id="btn-chat-send" type="submit">Send</button>
+          </form>
         </div>
       </section>
     </main>
@@ -371,6 +422,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/js/app.js?v=1.3.2"></script>
+  <script type="module" src="/js/app.js?v=1.3.5"></script>
 </body>
 </html>

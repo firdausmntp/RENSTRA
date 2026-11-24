@@ -61,6 +61,10 @@ func (f *fakeTGManager) UnpinMessage(_ context.Context, _, _ int64) error {
 	f.calls = append(f.calls, "unpin")
 	return nil
 }
+func (f *fakeTGManager) ReactMessage(_ context.Context, _, _ int64, emoji string) error {
+	f.calls = append(f.calls, "react:"+emoji)
+	return nil
+}
 
 func TestTelegramManageActions(t *testing.T) {
 	mgr := &fakeTGManager{topics: map[int64]string{7: "General"}}
@@ -90,8 +94,9 @@ func TestTelegramManageActions(t *testing.T) {
 	run(`{"action":"edit_message","message_id":99,"text":"updated"}`)
 	run(`{"action":"pin_message","message_id":99,"silent":true}`)
 	run(`{"action":"unpin_message","message_id":99}`)
+	run(`{"action":"react_message","message_id":99,"emoji":"🔥"}`)
 
-	if len(mgr.calls) != 9 {
-		t.Fatalf("expected 9 calls, got %d: %v", len(mgr.calls), mgr.calls)
+	if len(mgr.calls) != 10 {
+		t.Fatalf("expected 10 calls, got %d: %v", len(mgr.calls), mgr.calls)
 	}
 }

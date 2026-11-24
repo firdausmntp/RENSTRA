@@ -184,9 +184,14 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.3.2)
+## 7. Status Rilis & Pengembangan (v1.3.5)
 
-Fitur & pembaruan v1.3.2:
+Fitur & pembaruan v1.3.5:
+1. **Hybrid BM25 + Trigram Semantic Search (`internal/store/search.go`):** Pencarian histori percakapan (`session_search`) menggunakan ranking BM25 + Character Trigram Jaccard + pencocokan prefix/morfologi serta opsi `all_chats: true`.
+2. **Web Chat Playground (`/chat`), MCP Studio & Multi-Model per Provider (`internal/dashboard/api_chat.go`):** Uji chat/command langsung dari browser (`POST /api/chat`), kelola `mcp.yaml` dari Web Dashboard, serta tambah banyak Model ID sekaligus (dipisah koma) yang dikelompokkan per provider.
+3. **Safe Backup & Restore (`.tar.gz`), Historical Topic Harvester & `react_message` (`internal/store/backup.go`):** `renstra backup` / `GET /api/backup` (`VACUUM INTO` SQLite) & `renstra restore`, auto-harvest topik forum lama dari histori SQLite, serta reaksi emoji pesan (`react_message`).
+
+Fitur v1.3.2 sebelumnya:
 1. **Tool Native `telegram_manage` & Persistensi Topik SQLite:** Kelola topik forum (`list_topics`, `create_topic`, `rename_topic`, `close_topic`, `reopen_topic`, `delete_topic`) dan pesan (`delete_message`, `edit_message`, `pin_message`, `unpin_message`), persistensi `tg_topics:<chatID>` di SQLite, `send_telegram` mengembalikan `message_id`, serta injeksi `msg_id`/`reply_msg_id` pada konteks pesan masuk.
 2. **Dashboard UI Sync Fallback, `/favicon.ico` & 1-Line Logs:** Auto-fallback `main` -> `feat/core-agent` di `SyncUI`, `/favicon.ico` menyajikan `logo.svg`, serta log row 1-line responsif.
 

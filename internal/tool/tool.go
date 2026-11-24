@@ -50,6 +50,15 @@ func (r *Registry) Add(t Tool) {
 	r.tools[t.Name()] = t
 }
 
+// RemovePrefix removes all registered tools whose name starts with prefix (e.g. "mcp__").
+func (r *Registry) RemovePrefix(prefix string) {
+	for k := range r.tools {
+		if strings.HasPrefix(k, prefix) {
+			delete(r.tools, k)
+		}
+	}
+}
+
 func (r *Registry) Get(name string) (Tool, bool) {
 	t, ok := r.tools[name]
 	return t, ok

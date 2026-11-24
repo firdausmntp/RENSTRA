@@ -1,4 +1,4 @@
-import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.3.2';
+import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.3.5';
 
 export async function loadOverview() {
   const [ov, turnsData] = await Promise.all([api('/api/overview'), api('/api/turns?limit=10')]);
@@ -111,10 +111,17 @@ export function renderLogs() {
 }
 
 export async function loadSkills() {
-  const data = await api('/api/skills');
+  const [data, mcpData] = await Promise.all([api('/api/skills'), api('/api/mcp').catch(() => ({ servers: [] }))]);
   state.skills = data.skills || [];
   state.skillPage = 1;
   renderSkills();
+  const mcpBox = $('#mcp-list');
+  if (mcpBox) {
+    const servers = mcpData.servers || [];
+    mcpBox.innerHTML = !servers.length
+      ? '<div class="muted">No MCP servers configured in mcp.yaml.</div>'
+      : servers.map((s) => `<div class="list-item"><div><div class="mono"><strong>${esc(s.name)}</strong></div><div class="muted mono">${esc(s.url ? 'url: ' + s.url : s.command + ' ' + (s.args || []).join(' '))}</div></div><button class="btn btn-sm btn-danger" data-del-mcp="${esc(s.name)}">Delete</button></div>`).join('');
+  }
 }
 
 export function renderSkills() {
@@ -176,15 +183,44 @@ export async function loadAccounts() {
         </div>
         <button class="btn btn-sm btn-danger" data-del-account="${esc(a.Name)}">Delete</button>
       </div>`).join('');
+  const pList = $('#provider-names-list');
+  if (pList) {
+    pList.innerHTML = (d.accounts || []).map((a) => `<option value="${esc(a.Name)}">${esc(a.Kind)}</option>`).join('');
+  }
   const sel = $('#sel-default-model');
   const models = d.models || [];
   sel.innerHTML = models.map((m) => `<option value="${esc(m)}" ${m === d.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
   const detailsBox = $('#models-detail-list');
   if (detailsBox) {
     const details = d.model_details || [];
-    detailsBox.innerHTML = !details.length
-      ? '<div class="muted">No models configured.</div>'
-      : details.map((m) => `<div class="list-item"><div><div class="mono"><strong>${esc(m.ref)}</strong></div><div class="muted mono">ctx ${fmtTok(m.context)} · max_out ${fmtTok(m.max_output || 4096)}${m.vision ? ' · vision' : ''}</div></div></div>`).join('');
+    if (!details.length) {
+      detailsBox.innerHTML = '<div class="muted">No models configured.</div>';
+      return;
+    }
+    const groups = new Map();
+    for (const m of details) {
+      const p = m.provider || 'default';
+      if (!groups.has(p)) groups.set(p, []);
+      groups.get(p).push(m);
+    }
+    detailsBox.innerHTML = Array.from(groups.entries()).map(([prov, items]) => `
+      <div class="list-item" style="flex-direction:column;align-items:stretch;gap:8px;">
+        <div class="card-head" style="margin:0;">
+          <strong class="mono">${esc(prov)}</strong>
+          <span class="badge badge-info">${items.length} model${items.length > 1 ? 's' : ''}</span>
+        </div>
+        ${items.map((m) => `
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--border);">
+            <div>
+              <div class="mono"><strong>${esc(m.model)}</strong>${m.ref === d.default_model ? ' <span class="badge badge-ok">active</span>' : ''}</div>
+              <div class="muted mono">ctx ${fmtTok(m.context)} · max_out ${fmtTok(m.max_output || 4096)}${m.vision ? ' · vision' : ''}</div>
+            </div>
+            <div style="display:flex;gap:6px;">
+              ${m.ref !== d.default_model ? `<button class="btn btn-sm btn-ghost" data-use-model="${esc(m.ref)}">Use</button>` : ''}
+              <button class="btn btn-sm btn-danger" data-del-model="${esc(m.ref)}">Delete</button>
+            </div>
+          </div>`).join('')}
+      </div>`).join('');
   }
 }
 
@@ -199,4 +235,23 @@ export async function loadCronAndSessions() {
   $('#sessions-body').innerHTML = !sess.length
     ? '<tr><td colspan="5" class="muted">No active sessions.</td></tr>'
     : sess.map((x) => `<tr><td class="mono">${x.chat_id}</td><td class="mono">${esc(x.model || '-')}</td><td>${x.message_count}</td><td class="muted">${esc(x.last_at)}</td><td><button class="btn btn-sm btn-ghost" data-view-sess="${x.chat_id}">View</button> <button class="btn btn-sm btn-danger" data-clear-sess="${x.chat_id}">Reset</button></td></tr>`).join('');
+}
+
+export async function loadChatPlayground() {
+  const cid = Number($('#chat-pg-id')?.value || 1) || 1;
+  const box = $('#chat-pg-messages');
+  if (!box) return;
+  const data = await api(`/api/sessions/messages?chat_id=${encodeURIComponent(cid)}`);
+  const msgs = (data.messages || []).filter((m) => (m.Role || m.role) === 'user' || (m.Role || m.role) === 'assistant');
+  box.innerHTML = !msgs.length
+    ? '<div class="muted" style="padding:12px;">Belum ada pesan di sesi ini. Kirim pesan di bawah untuk menguji agent.</div>'
+    : msgs.map((m) => {
+        const role = (m.Role || m.role || 'user').toUpperCase();
+        const isUser = role === 'USER';
+        return `<div class="list-item" style="flex-direction:column;align-items:stretch;border-left:3px solid ${isUser ? 'var(--accent)' : 'var(--green)'};">
+          <div class="mono muted" style="font-size:11px;">${esc(role)}</div>
+          <div style="white-space:pre-wrap;word-break:break-word;">${esc(m.Content || m.content || '')}</div>
+        </div>`;
+      }).join('');
+  box.scrollTop = box.scrollHeight;
 }

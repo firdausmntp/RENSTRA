@@ -321,38 +321,52 @@ func (s *Server) handleModelAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nama model wajib diisi"})
 		return
 	}
-	args := []string{strings.TrimSpace(req.Model)}
-	if strings.TrimSpace(req.Provider) != "" {
-		args = append(args, strings.TrimSpace(req.Provider))
-	}
-	if strings.TrimSpace(req.Context) != "" {
-		args = append(args, strings.TrimSpace(req.Context))
-	}
-	if req.Vision {
-		args = append(args, "vision")
-	}
-	if strings.TrimSpace(req.Alias) != "" {
-		args = append(args, "alias="+strings.TrimSpace(req.Alias))
-	}
 	cfg := s.opts.Config
 	if cfg == nil {
 		cfg, _ = config.Load()
 	}
-	spec, err := config.ParseAddModelArgs(args, cfg)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	parts := strings.Split(req.Model, ",")
+	var added []string
+	for _, rawModel := range parts {
+		m := strings.TrimSpace(rawModel)
+		if m == "" {
+			continue
+		}
+		args := []string{m}
+		if strings.TrimSpace(req.Provider) != "" {
+			args = append(args, strings.TrimSpace(req.Provider))
+		}
+		if strings.TrimSpace(req.Context) != "" {
+			args = append(args, strings.TrimSpace(req.Context))
+		}
+		if req.Vision {
+			args = append(args, "vision")
+		}
+		if strings.TrimSpace(req.Alias) != "" && len(parts) == 1 {
+			args = append(args, "alias="+strings.TrimSpace(req.Alias))
+		}
+		spec, err := config.ParseAddModelArgs(args, cfg)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		updated, err := config.AddModel(spec, cfg)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		cfg = updated
+		added = append(added, spec.Provider+":"+spec.Model)
+	}
+	if len(added) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nama model wajib diisi"})
 		return
 	}
-	updated, err := config.AddModel(spec, cfg)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-		return
-	}
-	s.opts.Config = updated
+	s.opts.Config = cfg
 	if s.opts.ReloadConfig != nil {
-		s.opts.ReloadConfig(updated)
+		s.opts.ReloadConfig(cfg)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ref": spec.Provider + ":" + spec.Model})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ref": added[0], "refs": added, "count": len(added)})
 }
 
 func (s *Server) handleModelDelete(w http.ResponseWriter, r *http.Request) {

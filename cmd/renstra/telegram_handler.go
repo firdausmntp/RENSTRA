@@ -288,6 +288,9 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 	case "/version":
 		return fmt.Sprintf("⚡ **RENSTRA** `%s`\nSelf-hosted • Telegram-first • Single-binary Go", version) + h.updateFooter(), nil
 
+	case "/backup":
+		return h.handleBackupCmd(ctx, chatID)
+
 	case "/dashboard":
 		if h.dashAddr == "" {
 			return "📊 Web Dashboard tidak aktif. Jalankan `renstra serve --dashboard-port 8080` untuk mengaktifkannya.", nil

@@ -12,6 +12,7 @@ import (
 	"renstra/internal/agent"
 	"renstra/internal/config"
 	"renstra/internal/dashboard"
+	"renstra/internal/mcp"
 	"renstra/internal/memory"
 	"renstra/internal/skill"
 	"renstra/internal/store"
@@ -143,6 +144,31 @@ func startDashboardServer(ctx context.Context, cfg *config.Config, flags serveFl
 			handler.cfg = updated
 			runner.Fallbacks = buildFallbacks(updated)
 		},
+		ReloadMCP: func() {
+			mctx, mcancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer mcancel()
+			servers, _ := mcp.ConnectAll(mctx, loadMCPConfigs())
+			runner.Tools.RemovePrefix("mcp__")
+			for _, s := range servers {
+				for _, t := range s.Tools {
+					runner.Tools.Add(t)
+				}
+			}
+			handler.mu.Lock()
+			for _, cr := range handler.chats {
+				cr.Tools.RemovePrefix("mcp__")
+				for _, s := range servers {
+					for _, t := range s.Tools {
+						cr.Tools.Add(t)
+					}
+				}
+			}
+			handler.mu.Unlock()
+			handler.invalidateAllPrompts()
+		},
+		RunChat: func(rctx context.Context, chatID int64, prompt string) (string, error) {
+			return handler.Handle(agent.WithUnattended(rctx), chatID, prompt)
+		},
 	})
 	if err != nil {
 		logger.Error("dashboard_init_failed", "addr", addr, "error", err.Error())
@@ -253,4 +279,72 @@ func dashboardCmd(args []string) error {
 	defer stop()
 	fmt.Printf("RENSTRA Web Dashboard berjalan di http://%s (Ctrl+C untuk berhenti)\n", addr)
 	return srv.Run(ctx)
+}
+
+func backupCmd(args []string) error {
+	home := config.Home()
+	outPath := fmt.Sprintf("renstra-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
+	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
+		outPath = strings.TrimSpace(args[0])
+	}
+	st, err := store.Open(filepath.Join(home, "state.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := st.BackupArchive(context.Background(), home, f); err != nil {
+		return err
+	}
+	fmt.Printf("✅ Backup tersimpan di %s\n", outPath)
+	return nil
+}
+
+func restoreCmd(args []string) error {
+	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
+		return fmt.Errorf("pemakaian: renstra restore <file-backup.tar.gz>")
+	}
+	inPath := strings.TrimSpace(args[0])
+	f, err := os.Open(inPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	home := config.Home()
+	files, err := store.RestoreArchive(home, f)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("✅ Restore selesai ke %s (%d berkas dipulihkan)\n", home, len(files))
+	return nil
+}
+
+func (h *telegramHandler) handleBackupCmd(ctx context.Context, chatID int64) (string, error) {
+	if h.store == nil {
+		return "❌ Store tidak tersedia.", nil
+	}
+	fname := fmt.Sprintf("renstra-backup-%s.tar.gz", time.Now().Format("20060102-150405"))
+	tmpPath := filepath.Join(os.TempDir(), fname)
+	defer os.Remove(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return "", err
+	}
+	err = h.store.BackupArchive(ctx, config.Home(), f)
+	_ = f.Close()
+	if err != nil {
+		return "", err
+	}
+	if h.bot != nil {
+		caption := fmt.Sprintf("📦 **RENSTRA Backup** (`%s`)\nBerisi `state.db`, `config.yaml`, `mcp.yaml`, `memory/`, dan `skills/`.", version)
+		if err := h.bot.SendDocument(ctx, chatID, tmpPath, caption); err != nil {
+			return "", err
+		}
+		return "", nil
+	}
+	return "✅ Backup berhasil dibuat: `" + fname + "`", nil
 }

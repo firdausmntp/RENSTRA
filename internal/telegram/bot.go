@@ -73,8 +73,9 @@ type Bot struct {
 	locks       map[int64]*chatLock
 	queued      map[int64]*queuedTurn
 	pending      map[int64]*pendingApproval
-	topicNames   map[int64]string
-	topicsByChat map[int64]map[int64]string
+	topicNames      map[int64]string
+	topicsByChat    map[int64]map[int64]string
+	harvestedTopics map[int64]string
 	approvalSeq int64
 	turnSeq     int64
 	draftSeq    int64

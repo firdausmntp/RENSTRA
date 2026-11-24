@@ -251,6 +251,19 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 					models = append(models, cfg.DefaultModel)
 				}
 			}
+			for _, fb := range cfg.Fallbacks {
+				fb = strings.TrimSpace(fb)
+				if fb == "" || seen[fb] {
+					continue
+				}
+				if pcfg, mname, rerr := config.Resolve(fb, cfg); rerr == nil {
+					pn := fb
+					if i := strings.Index(pn, ":"); i > 0 {
+						pn = pn[:i]
+					}
+					addModel(pn, mname, pcfg)
+				}
+			}
 		}
 		defModel := ""
 		if cfg != nil {

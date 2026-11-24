@@ -213,15 +213,38 @@ func (b *Bot) DeleteForumTopic(ctx context.Context, chatID, threadID int64) erro
 	return err
 }
 
-// ListKnownTopics returns a copy of known topic_id -> name entries observed or created in chatID.
+// ListKnownTopics returns a copy of known topic_id -> name entries observed or created in chatID,
+// merged with any forum topics harvested from historical SQLite transcripts.
 func (b *Bot) ListKnownTopics(chatID int64) map[int64]string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	out := make(map[int64]string)
-	for tid, name := range b.topicsByChat[chatID] {
+	for tid, name := range b.harvestedTopics {
 		out[tid] = name
 	}
+	for tid, name := range b.topicsByChat[chatID] {
+		if name != "" || out[tid] == "" {
+			out[tid] = name
+		}
+	}
 	return out
+}
+
+// SeedHarvestedTopics loads topic IDs & names discovered from historical transcripts.
+func (b *Bot) SeedHarvestedTopics(topics map[int64]string) {
+	if len(topics) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.harvestedTopics == nil {
+		b.harvestedTopics = make(map[int64]string, len(topics))
+	}
+	for tid, name := range topics {
+		if tid > 0 {
+			b.harvestedTopics[tid] = name
+		}
+	}
 }
 
 // DeleteMessage deletes a message in a Telegram chat.
@@ -284,6 +307,23 @@ func (b *Bot) UnpinMessage(ctx context.Context, chatID, messageID int64) error {
 		payload["message_id"] = messageID
 	}
 	_, err := b.post(ctx, "unpinChatMessage", payload)
+	return err
+}
+
+// ReactMessage sets an emoji reaction (or clears it when emoji is empty) on messageID.
+func (b *Bot) ReactMessage(ctx context.Context, chatID, messageID int64, emoji string) error {
+	if chatID == 0 || messageID <= 0 {
+		return fmt.Errorf("chat_id dan message_id wajib > 0")
+	}
+	var reactions []map[string]any
+	if e := strings.TrimSpace(emoji); e != "" {
+		reactions = []map[string]any{{"type": "emoji", "emoji": e}}
+	}
+	_, err := b.post(ctx, "setMessageReaction", map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"reaction":   reactions,
+	})
 	return err
 }
 

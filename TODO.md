@@ -4,6 +4,20 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.3.5 (Hybrid Semantic Search, Web Chat Playground, Backup & Restore `.tar.gz`, MCP Studio, Multi-Model per Provider & `react_message`)
+
+- [x] **Hybrid BM25 + Trigram/Morphological Semantic Search & Cross-Chat `session_search`**
+  - **Lokasi:** [`internal/store/search.go`](internal/store/search.go), [`internal/store/messages.go`](internal/store/messages.go), [`internal/tool/session_search.go`](internal/tool/session_search.go)
+  - **Fitur:** Mengganti `LIKE` kaku dengan ranking BM25 + Character Trigram Jaccard + pencocokan prefix/morfologi serta parameter `all_chats: true` lintas seluruh sesi/topik.
+- [x] **Web Chat Playground (`/chat`), MCP Studio (`mcp.yaml`) & Batch Multi-Model per Provider**
+  - **Lokasi:** [`internal/dashboard/api_chat.go`](internal/dashboard/api_chat.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`internal/dashboard/api_manage.go`](internal/dashboard/api_manage.go), [`internal/dashboard/ui/`](internal/dashboard/ui/index.html)
+  - **Fitur:** Tab **Chat Playground** (`/chat` & `POST /api/chat`) untuk uji agent/slash command dari browser, CRUD `mcp.yaml` di tab Skills Studio, serta registrasi banyak Model ID sekaligus (dipisah koma) dan pengelompokan model per provider.
+- [x] **Safe Backup & Restore `.tar.gz` (`renstra backup` / `renstra restore` + Dashboard) & Historical Topic Harvester + `react_message`**
+  - **Lokasi:** [`internal/store/backup.go`](internal/store/backup.go), [`cmd/renstra/dashboard.go`](cmd/renstra/dashboard.go), [`internal/telegram/bot105.go`](internal/telegram/bot105.go), [`internal/tool/telegram_manage.go`](internal/tool/telegram_manage.go)
+  - **Fitur:** Snapshot `.tar.gz` konsisten (`VACUUM INTO` SQLite + `config.yaml` + `mcp.yaml` + `memory/` + `skills/`), pemulihan aman `renstra restore`, auto-harvest topik lama dari histori SQLite, serta action `react_message` (`setMessageReaction`).
+
+---
+
 ## Rilis v1.3.2 (`telegram_manage` Native, Persistensi Topik SQLite, Injeksi `msg_id`/`reply_msg_id` & Dashboard Polish)
 
 - [x] **Tool Native `telegram_manage` (Manajemen Topik Forum & Pesan Lengkap)**

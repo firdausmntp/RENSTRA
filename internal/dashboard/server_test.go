@@ -158,3 +158,56 @@ func TestResolveUIFSLocalAndCacheOverride(t *testing.T) {
 		t.Fatalf("expected local override, got %q", src2)
 	}
 }
+
+func TestChatPlaygroundAndBackupEndpoint(t *testing.T) {
+	home := t.TempDir()
+	st, err := store.Open(filepath.Join(home, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	var mcpReloads int
+	srv, err := New(Options{
+		Addr:    "127.0.0.1:0",
+		HomeDir: home,
+		Store:   st,
+		ReloadMCP: func() {
+			mcpReloads++
+		},
+		RunChat: func(_ context.Context, chatID int64, prompt string) (string, error) {
+			return "echo:" + prompt, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat", strings.NewReader(`{"chat_id":7,"prompt":"halo"}`))
+	rec := httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "echo:halo") {
+		t.Fatalf("POST /api/chat failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/mcp/save", strings.NewReader(`{"name":"pw","command":"npx","args":"-y @playwright/mcp"}`))
+	rec = httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || mcpReloads != 1 {
+		t.Fatalf("POST /api/mcp/save failed: %d reloads=%d", rec.Code, mcpReloads)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/backup", nil)
+	rec = httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("GET /api/backup failed: %d len=%d", rec.Code, rec.Body.Len())
+	}
+	backupBytes := rec.Body.Bytes()
+
+	req = httptest.NewRequest(http.MethodPost, "/api/restore", strings.NewReader(string(backupBytes)))
+	rec = httptest.NewRecorder()
+	srv.http.Handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || mcpReloads < 2 {
+		t.Fatalf("POST /api/restore failed: %d %s", rec.Code, rec.Body.String())
+	}
+}

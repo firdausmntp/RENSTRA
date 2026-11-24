@@ -55,6 +55,8 @@ type Options struct {
 	InvalidatePrompts  func()
 	SetDefaultModelRun func(ref string) error
 	ReloadConfig       func(cfg *config.Config)
+	ReloadMCP          func()
+	RunChat            func(ctx context.Context, chatID int64, prompt string) (string, error)
 }
 
 // Server serves the embedded or hot-synced RENSTRA web dashboard and REST/SSE APIs.
@@ -107,6 +109,12 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/fallback/reset", s.withAuth(s.handleFallbackReset))
 	mux.HandleFunc("/api/ui/sync", s.withAuth(s.handleUISync))
 	mux.HandleFunc("/api/ui/reset", s.withAuth(s.handleUIReset))
+	mux.HandleFunc("/api/chat", s.withAuth(s.handleChat))
+	mux.HandleFunc("/api/backup", s.withAuth(s.handleBackup))
+	mux.HandleFunc("/api/restore", s.withAuth(s.handleRestore))
+	mux.HandleFunc("/api/mcp", s.withAuth(s.handleMCPList))
+	mux.HandleFunc("/api/mcp/save", s.withAuth(s.handleMCPSave))
+	mux.HandleFunc("/api/mcp/delete", s.withAuth(s.handleMCPDelete))
 	mux.Handle("/", s.handleUI())
 
 	s.http = &http.Server{
