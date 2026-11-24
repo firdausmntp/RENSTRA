@@ -32,6 +32,13 @@ func (s *Server) handleUI() http.Handler {
 		root, _, _ := s.activeUIFS()
 		w.Header().Set("Cache-Control", "no-cache")
 		clean := strings.TrimPrefix(r.URL.Path, "/")
+		if clean == "favicon.ico" {
+			if raw, err := fs.ReadFile(root, "logo.svg"); err == nil {
+				w.Header().Set("Content-Type", "image/svg+xml")
+				_, _ = w.Write(raw)
+				return
+			}
+		}
 		if clean == "" || !strings.Contains(clean, ".") {
 			raw, err := fs.ReadFile(root, "index.html")
 			if err != nil {

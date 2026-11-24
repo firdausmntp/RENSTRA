@@ -81,14 +81,22 @@ func SyncUI(ctx context.Context, homeDir, repo, branch string) (*UIManifest, err
 	if strings.TrimSpace(repo) == "" {
 		repo = defaultUIRepo
 	}
-	if strings.TrimSpace(branch) == "" {
-		branch = defaultUIBranch
+	branches := []string{strings.TrimSpace(branch)}
+	if branches[0] == "" {
+		branches = []string{defaultUIBranch, "feat/core-agent"}
 	}
 
-	baseURL := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/internal/dashboard/ui", strings.Trim(repo, "/"), strings.Trim(branch, "/"))
 	client := &http.Client{Timeout: 20 * time.Second}
-
-	rawManifest, err := fetchUIFile(ctx, client, baseURL+"/manifest.json")
+	var baseURL string
+	var rawManifest []byte
+	var err error
+	for _, br := range branches {
+		baseURL = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/internal/dashboard/ui", strings.Trim(repo, "/"), strings.Trim(br, "/"))
+		rawManifest, err = fetchUIFile(ctx, client, baseURL+"/manifest.json")
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("gagal mengambil manifest UI: %w", err)
 	}

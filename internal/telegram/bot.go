@@ -35,11 +35,12 @@ type Config struct {
 	PollTimeout   time.Duration
 	APIBase       string
 	WorkspaceDir  string
-	OnSeen        func(updateID int64)
-	OnAutoApprove func(chatID int64)
-	OnCallback    func(ctx context.Context, chatID, msgID int64, data string)
-	OnErrorLog    func(ctx context.Context, chatID int64, err error) string
-	Transcribe    func(ctx context.Context, audioPath string) (string, error)
+	OnSeen          func(updateID int64)
+	OnAutoApprove   func(chatID int64)
+	OnCallback      func(ctx context.Context, chatID, msgID int64, data string)
+	OnErrorLog      func(ctx context.Context, chatID int64, err error) string
+	OnTopicsChanged func(chatID int64, topics map[int64]string)
+	Transcribe      func(ctx context.Context, audioPath string) (string, error)
 }
 
 type Handler interface {
@@ -57,11 +58,12 @@ type Bot struct {
 	groupMode     string
 	botUsername   string
 	updateFooter  string
-	onSeen        func(int64)
-	onAutoApprove func(int64)
-	onCallback    func(context.Context, int64, int64, string)
-	onErrorLog    func(context.Context, int64, error) string
-	transcribe    func(context.Context, string) (string, error)
+	onSeen          func(int64)
+	onAutoApprove   func(int64)
+	onCallback      func(context.Context, int64, int64, string)
+	onErrorLog      func(context.Context, int64, error) string
+	onTopicsChanged func(int64, map[int64]string)
+	transcribe      func(context.Context, string) (string, error)
 	http          *http.Client
 
 	mu          sync.Mutex
@@ -70,8 +72,9 @@ type Bot struct {
 	cancels     map[int64]turnHandle
 	locks       map[int64]*chatLock
 	queued      map[int64]*queuedTurn
-	pending     map[int64]*pendingApproval
-	topicNames  map[int64]string
+	pending      map[int64]*pendingApproval
+	topicNames   map[int64]string
+	topicsByChat map[int64]map[int64]string
 	approvalSeq int64
 	turnSeq     int64
 	draftSeq    int64
@@ -137,11 +140,12 @@ func New(cfg Config) (*Bot, error) {
 		allowedTopics: topics,
 		groupMode:     strings.TrimSpace(cfg.GroupMode),
 		botUsername:   strings.TrimPrefix(strings.TrimSpace(cfg.BotUsername), "@"),
-		onSeen:        cfg.OnSeen,
-		onAutoApprove: cfg.OnAutoApprove,
-		onCallback:    cfg.OnCallback,
-		onErrorLog:    cfg.OnErrorLog,
-		transcribe:    cfg.Transcribe,
+		onSeen:          cfg.OnSeen,
+		onAutoApprove:   cfg.OnAutoApprove,
+		onCallback:      cfg.OnCallback,
+		onErrorLog:      cfg.OnErrorLog,
+		onTopicsChanged: cfg.OnTopicsChanged,
+		transcribe:      cfg.Transcribe,
 		http:          &http.Client{Timeout: poll + 30*time.Second, Transport: tr},
 		seen:          map[int64]struct{}{},
 		cancels:       map[int64]turnHandle{},
@@ -149,6 +153,7 @@ func New(cfg Config) (*Bot, error) {
 		queued:        map[int64]*queuedTurn{},
 		pending:       map[int64]*pendingApproval{},
 		topicNames:    map[int64]string{},
+		topicsByChat:  map[int64]map[int64]string{},
 	}, nil
 }
 

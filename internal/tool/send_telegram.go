@@ -57,11 +57,26 @@ func (t *SendTelegram) Execute(ctx context.Context, raw json.RawMessage) (string
 	if targetChat == 0 {
 		return "", errors.New("send_telegram hanya tersedia di sesi chat Telegram atau perlu chat_id")
 	}
-	if err := t.sender.SendToTopic(ctx, targetChat, in.TopicID, in.Text); err != nil {
+	var msgID int64
+	if idSender, ok := t.sender.(interface {
+		SendToTopicReturningID(ctx context.Context, chatID, topicID int64, markdown string) (int64, error)
+	}); ok {
+		id, err := idSender.SendToTopicReturningID(ctx, targetChat, in.TopicID, in.Text)
+		if err != nil {
+			return "", err
+		}
+		msgID = id
+	} else if err := t.sender.SendToTopic(ctx, targetChat, in.TopicID, in.Text); err != nil {
 		return "", err
 	}
 	if in.TopicID > 0 {
+		if msgID > 0 {
+			return fmt.Sprintf("pesan terkirim ke chat %d topik %d (message_id=%d)", targetChat, in.TopicID, msgID), nil
+		}
 		return fmt.Sprintf("pesan terkirim ke chat %d topik %d", targetChat, in.TopicID), nil
+	}
+	if msgID > 0 {
+		return fmt.Sprintf("pesan terkirim ke chat %d (message_id=%d)", targetChat, msgID), nil
 	}
 	return fmt.Sprintf("pesan terkirim ke chat %d", targetChat), nil
 }

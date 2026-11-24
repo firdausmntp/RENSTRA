@@ -4,6 +4,20 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.3.2 (`telegram_manage` Native, Persistensi Topik SQLite, Injeksi `msg_id`/`reply_msg_id` & Dashboard Polish)
+
+- [x] **Tool Native `telegram_manage` (Manajemen Topik Forum & Pesan Lengkap)**
+  - **Lokasi:** [`internal/tool/telegram_manage.go`](internal/tool/telegram_manage.go), [`internal/telegram/bot105.go`](internal/telegram/bot105.go), [`internal/telegram/bot.go`](internal/telegram/bot.go), [`internal/config/config.go`](internal/config/config.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go)
+  - **Fitur:** `list_topics`, `create_topic`, `rename_topic`, `close_topic`, `reopen_topic`, `delete_topic`, `delete_message`, `edit_message` (Markdown -> HTML), `pin_message`, dan `unpin_message`.
+- [x] **Persistensi Daftar Topik di SQLite + `message_id` di `send_telegram` + Konteks `msg_id`/`reply_msg_id`**
+  - **Lokasi:** [`internal/store/helpers.go`](internal/store/helpers.go), [`internal/telegram/reply.go`](internal/telegram/reply.go), [`internal/tool/send_telegram.go`](internal/tool/send_telegram.go)
+  - **Fitur:** Daftar topik per grup (`tg_topics:<chatID>`) disimpan ke SQLite (`kv`) dan dimuat ulang saat startup; `send_telegram` mengembalikan `message_id`; konteks pesan masuk menyertakan `msg_id` dan `reply_msg_id`.
+- [x] **Dashboard UI Sync Fallback & `/favicon.ico`**
+  - **Lokasi:** [`internal/dashboard/uisync.go`](internal/dashboard/uisync.go), [`internal/dashboard/api_ops.go`](internal/dashboard/api_ops.go), [`internal/dashboard/ui/`](internal/dashboard/ui/styles/components.css)
+  - **Perbaikan:** Fallback branch `main` -> `feat/core-agent` pada `SyncUI`, handler `/favicon.ico` -> `logo.svg`, serta baris log 1-line responsif dengan cache-buster ES module.
+
+---
+
 ## Rilis v1.3.1 (Hybrid GitHub UI Hot-Sync, Light Theme Default, Logs Beautifier, Skills Pagination, Model/Context & Vision Fix)
 
 - [x] **3-Layer Hybrid UI Loader & GitHub Hot-Sync**

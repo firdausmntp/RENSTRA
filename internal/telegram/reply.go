@@ -43,6 +43,13 @@ func WithTopic(ctx context.Context, threadID int64) context.Context {
 // SendToTopic sends a formatted Markdown message to a specific chat and forum topic
 // (without replying to the triggering message in the source topic).
 func (b *Bot) SendToTopic(ctx context.Context, chatID, topicID int64, markdown string) error {
+	_, err := b.SendToTopicReturningID(ctx, chatID, topicID, markdown)
+	return err
+}
+
+// SendToTopicReturningID sends a formatted Markdown message to a specific chat and
+// forum topic, returning the Telegram message_id of the last sent chunk.
+func (b *Bot) SendToTopicReturningID(ctx context.Context, chatID, topicID int64, markdown string) (int64, error) {
 	targetCtx := withReplyTarget(context.Background(), 0, topicID)
 	if ctx != nil {
 		if deadline, ok := ctx.Deadline(); ok {
@@ -51,22 +58,31 @@ func (b *Bot) SendToTopic(ctx context.Context, chatID, topicID int64, markdown s
 			defer cancel()
 		}
 	}
+	var lastID int64
 	var lastErr error
 	for _, chunk := range SplitMessage(markdown, MaxMessageLength) {
 		if len([]rune(markdownToHTML(chunk))) > MaxMessageLength {
 			for _, sub := range SplitMessage(chunk, 2400) {
-				if err := b.SendMessage(targetCtx, chatID, sub); err != nil {
-					return err
+				id, err := b.SendMessageReturningID(targetCtx, chatID, sub)
+				if err != nil {
+					return lastID, err
+				}
+				if id > 0 {
+					lastID = id
 				}
 			}
 			continue
 		}
-		if err := b.SendMessage(targetCtx, chatID, chunk); err != nil {
+		id, err := b.SendMessageReturningID(targetCtx, chatID, chunk)
+		if err != nil {
 			lastErr = err
 			break
 		}
+		if id > 0 {
+			lastID = id
+		}
 	}
-	return lastErr
+	return lastID, lastErr
 }
 
 // SessionChatID returns an isolated session key per (chatID, threadID) when inside
@@ -126,15 +142,14 @@ func (b *Bot) trackTopicName(m message) string {
 	}
 	key := turnScopeKey(m.Chat.ID, threadID)
 	b.mu.Lock()
-	if b.topicNames == nil {
-		b.topicNames = map[int64]string{}
-	}
-	if found != "" {
-		b.topicNames[key] = found
-	} else {
+	changed := b.recordTopicLocked(m.Chat.ID, threadID, found)
+	if found == "" {
 		found = b.topicNames[key]
 	}
 	b.mu.Unlock()
+	if changed {
+		b.notifyTopicsChanged(m.Chat.ID)
+	}
 	return found
 }
 
@@ -195,7 +210,13 @@ func (b *Bot) appendReplyContext(ctx, turnCtx context.Context, m message, text s
 			meta = append(meta, "Pengirim: "+sender)
 		}
 	}
-	if len(meta) > 0 {
+	if len(meta) > 0 || m.MessageID > 0 {
+		if m.MessageID > 0 {
+			meta = append(meta, fmt.Sprintf("msg_id: %d", m.MessageID))
+		}
+		if m.ReplyToMessage != nil && !isTopicRootReply && m.ReplyToMessage.MessageID > 0 {
+			meta = append(meta, fmt.Sprintf("reply_msg_id: %d", m.ReplyToMessage.MessageID))
+		}
 		prefixParts = append(prefixParts, "["+strings.Join(meta, " | ")+"]")
 	}
 

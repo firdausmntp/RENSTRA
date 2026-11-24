@@ -137,11 +137,11 @@ func (b *Bot) CreateForumTopic(ctx context.Context, chatID int64, name string) (
 	}
 	if res.MessageThreadID > 0 {
 		b.mu.Lock()
-		if b.topicNames == nil {
-			b.topicNames = map[int64]string{}
-		}
-		b.topicNames[turnScopeKey(chatID, res.MessageThreadID)] = trimmed
+		changed := b.recordTopicLocked(chatID, res.MessageThreadID, trimmed)
 		b.mu.Unlock()
+		if changed {
+			b.notifyTopicsChanged(chatID)
+		}
 	}
 	return res.MessageThreadID, nil
 }
@@ -159,11 +159,177 @@ func (b *Bot) EditForumTopic(ctx context.Context, chatID, threadID int64, name s
 	})
 	if err == nil {
 		b.mu.Lock()
-		if b.topicNames == nil {
-			b.topicNames = map[int64]string{}
-		}
-		b.topicNames[turnScopeKey(chatID, threadID)] = trimmed
+		changed := b.recordTopicLocked(chatID, threadID, trimmed)
 		b.mu.Unlock()
+		if changed {
+			b.notifyTopicsChanged(chatID)
+		}
 	}
 	return err
+}
+
+// CloseForumTopic closes an open forum topic in a supergroup chat.
+func (b *Bot) CloseForumTopic(ctx context.Context, chatID, threadID int64) error {
+	if threadID <= 0 {
+		return fmt.Errorf("topic_id wajib > 0")
+	}
+	_, err := b.post(ctx, "closeForumTopic", map[string]any{
+		"chat_id":           chatID,
+		"message_thread_id": threadID,
+	})
+	return err
+}
+
+// ReopenForumTopic reopens a closed forum topic in a supergroup chat.
+func (b *Bot) ReopenForumTopic(ctx context.Context, chatID, threadID int64) error {
+	if threadID <= 0 {
+		return fmt.Errorf("topic_id wajib > 0")
+	}
+	_, err := b.post(ctx, "reopenForumTopic", map[string]any{
+		"chat_id":           chatID,
+		"message_thread_id": threadID,
+	})
+	return err
+}
+
+// DeleteForumTopic permanently deletes a forum topic and all its messages.
+func (b *Bot) DeleteForumTopic(ctx context.Context, chatID, threadID int64) error {
+	if threadID <= 0 {
+		return fmt.Errorf("topic_id wajib > 0")
+	}
+	_, err := b.post(ctx, "deleteForumTopic", map[string]any{
+		"chat_id":           chatID,
+		"message_thread_id": threadID,
+	})
+	if err == nil {
+		b.mu.Lock()
+		delete(b.topicNames, turnScopeKey(chatID, threadID))
+		if b.topicsByChat != nil && b.topicsByChat[chatID] != nil {
+			delete(b.topicsByChat[chatID], threadID)
+		}
+		b.mu.Unlock()
+		b.notifyTopicsChanged(chatID)
+	}
+	return err
+}
+
+// ListKnownTopics returns a copy of known topic_id -> name entries observed or created in chatID.
+func (b *Bot) ListKnownTopics(chatID int64) map[int64]string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make(map[int64]string)
+	for tid, name := range b.topicsByChat[chatID] {
+		out[tid] = name
+	}
+	return out
+}
+
+// DeleteMessage deletes a message in a Telegram chat.
+func (b *Bot) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	if chatID == 0 || messageID <= 0 {
+		return fmt.Errorf("chat_id dan message_id wajib > 0")
+	}
+	_, err := b.post(ctx, "deleteMessage", map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	})
+	return err
+}
+
+// EditFormattedMessage edits an existing bot message using Markdown -> Telegram HTML formatting.
+func (b *Bot) EditFormattedMessage(ctx context.Context, chatID, messageID int64, markdown string) error {
+	if chatID == 0 || messageID <= 0 {
+		return fmt.Errorf("chat_id dan message_id wajib > 0")
+	}
+	htmlText := markdownToHTML(markdown)
+	if strings.TrimSpace(htmlText) == "" {
+		return fmt.Errorf("teks edit tidak boleh kosong")
+	}
+	_, err := b.post(ctx, "editMessageText", map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       htmlText,
+		"parse_mode": "HTML",
+	})
+	if err != nil {
+		_, err = b.post(ctx, "editMessageText", map[string]any{
+			"chat_id":    chatID,
+			"message_id": messageID,
+			"text":       markdown,
+		})
+	}
+	return err
+}
+
+// PinMessage pins a message in a Telegram chat.
+func (b *Bot) PinMessage(ctx context.Context, chatID, messageID int64, disableNotification bool) error {
+	if chatID == 0 || messageID <= 0 {
+		return fmt.Errorf("chat_id dan message_id wajib > 0")
+	}
+	_, err := b.post(ctx, "pinChatMessage", map[string]any{
+		"chat_id":              chatID,
+		"message_id":           messageID,
+		"disable_notification": disableNotification,
+	})
+	return err
+}
+
+// UnpinMessage unpins a specific message (or the latest pinned message when messageID <= 0).
+func (b *Bot) UnpinMessage(ctx context.Context, chatID, messageID int64) error {
+	if chatID == 0 {
+		return fmt.Errorf("chat_id wajib diisi")
+	}
+	payload := map[string]any{"chat_id": chatID}
+	if messageID > 0 {
+		payload["message_id"] = messageID
+	}
+	_, err := b.post(ctx, "unpinChatMessage", payload)
+	return err
+}
+
+// SeedTopics preloads persisted forum topics from SQLite on startup.
+func (b *Bot) SeedTopics(all map[int64]map[int64]string) {
+	if len(all) == 0 {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for cid, topics := range all {
+		for tid, name := range topics {
+			b.recordTopicLocked(cid, tid, name)
+		}
+	}
+}
+
+func (b *Bot) notifyTopicsChanged(chatID int64) {
+	if b.onTopicsChanged == nil || chatID == 0 {
+		return
+	}
+	b.onTopicsChanged(chatID, b.ListKnownTopics(chatID))
+}
+
+func (b *Bot) recordTopicLocked(chatID, threadID int64, name string) bool {
+	if threadID <= 0 {
+		return false
+	}
+	if b.topicNames == nil {
+		b.topicNames = map[int64]string{}
+	}
+	if b.topicsByChat == nil {
+		b.topicsByChat = map[int64]map[int64]string{}
+	}
+	if b.topicsByChat[chatID] == nil {
+		b.topicsByChat[chatID] = map[int64]string{}
+	}
+	if name != "" {
+		prev, exists := b.topicsByChat[chatID][threadID]
+		b.topicNames[turnScopeKey(chatID, threadID)] = name
+		b.topicsByChat[chatID][threadID] = name
+		return !exists || prev != name
+	}
+	if _, exists := b.topicsByChat[chatID][threadID]; !exists {
+		b.topicsByChat[chatID][threadID] = b.topicNames[turnScopeKey(chatID, threadID)]
+		return true
+	}
+	return false
 }

@@ -106,10 +106,18 @@ func serveCmd(args []string) error {
 			logger.Error("telegram_runtime_error", "chat_id", cid, "model", modelName, "error", e.Error())
 			return errLog.recordAndWriteSnapshot(cid, modelName, e)
 		},
+		OnTopicsChanged: func(cid int64, topics map[int64]string) {
+			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer scancel()
+			_ = st.SaveChatTopics(sctx, cid, topics)
+		},
 		Transcribe: buildTranscriber(cfg),
 	})
 	if err != nil {
 		return err
+	}
+	if savedTopics, err := st.LoadAllChatTopics(ctx); err == nil {
+		bot.SeedTopics(savedTopics)
 	}
 	for _, id := range recentIDs {
 		bot.MarkSeen(id)
@@ -196,6 +204,7 @@ func serveCmd(args []string) error {
 		tool.NewSessionSearch(st),
 		tool.NewSendFile(workspace, bot),
 		tool.NewSendTelegram(bot),
+		tool.NewTelegramManage(bot),
 	}
 	for _, t := range candidates {
 		if cfg.Tools.IsEnabled(t.Name()) {

@@ -1,4 +1,4 @@
-import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.3.1-ui2';
+import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.3.2';
 
 export async function loadOverview() {
   const [ov, turnsData] = await Promise.all([api('/api/overview'), api('/api/turns?limit=10')]);

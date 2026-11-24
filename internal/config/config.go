@@ -78,6 +78,7 @@ type ToolsConfig struct {
 	SessionSearch     *bool `yaml:"session_search"`
 	SendFile          *bool `yaml:"send_file"`
 	SendTelegram      *bool `yaml:"send_telegram"`
+	TelegramManage    *bool `yaml:"telegram_manage"`
 	AllowPrivateFetch bool  `yaml:"allow_private_web_fetch"`
 }
 
@@ -242,6 +243,8 @@ func (t ToolsConfig) IsEnabled(name string) bool {
 		v = t.SendFile
 	case "send_telegram":
 		v = t.SendTelegram
+	case "telegram_manage":
+		v = t.TelegramManage
 	}
 	if v == nil {
 		return true

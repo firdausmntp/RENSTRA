@@ -1,8 +1,8 @@
-import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.3.1-ui2';
+import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.3.2';
 import {
   loadOverview, loadLogs, renderLogs,
   loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions
-} from './views.js?v=1.3.1-ui2';
+} from './views.js?v=1.3.2';
 
 function openDrawer(open) {
   $('#sidebar').classList.toggle('open', open);

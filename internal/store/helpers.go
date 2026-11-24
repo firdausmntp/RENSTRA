@@ -3,8 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -276,4 +279,44 @@ func (s *Store) GetChatSettings(ctx context.Context, chatID int64) (string, erro
 		return "", nil
 	}
 	return raw, err
+}
+
+// SaveChatTopics persists known forum topic_id -> name entries for chatID.
+func (s *Store) SaveChatTopics(ctx context.Context, chatID int64, topics map[int64]string) error {
+	key := fmt.Sprintf("tg_topics:%d", chatID)
+	if len(topics) == 0 {
+		_, err := s.db.ExecContext(ctx, `DELETE FROM kv WHERE key = ?`, key)
+		return err
+	}
+	raw, err := json.Marshal(topics)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT OR REPLACE INTO kv(key, value) VALUES(?, ?)`, key, string(raw))
+	return err
+}
+
+// LoadAllChatTopics restores all persisted forum topic maps per chatID.
+func (s *Store) LoadAllChatTopics(ctx context.Context) (map[int64]map[int64]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM kv WHERE key LIKE 'tg_topics:%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]map[int64]string)
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		cid, err := strconv.ParseInt(strings.TrimPrefix(k, "tg_topics:"), 10, 64)
+		if err != nil || cid == 0 {
+			continue
+		}
+		var topics map[int64]string
+		if json.Unmarshal([]byte(v), &topics) == nil && len(topics) > 0 {
+			out[cid] = topics
+		}
+	}
+	return out, rows.Err()
 }
