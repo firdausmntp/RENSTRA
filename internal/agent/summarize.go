@@ -67,7 +67,7 @@ func (r *Runner) summarize(ctx context.Context, msgs []provider.Message) string 
 		b.WriteString(ev.Text)
 	}
 	if usage != nil {
-		r.recordUsageWithPrices(usage, priceIn, priceOut)
+		r.recordUsageWithPrices(usage, model, priceIn, priceOut)
 	}
 	out := strings.TrimSpace(b.String())
 	if out == "" {

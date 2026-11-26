@@ -198,8 +198,8 @@ func defaults() *Config {
 		Aliases:   map[string]string{},
 		Limits:    Limits{WarnDailyUSD: 1.0},
 		Agent: Agent{
-			MaxIterations:    40,
-			MaxTurnTimeout:   Duration(15 * time.Minute),
+			MaxIterations:    80,
+			MaxTurnTimeout:   Duration(30 * time.Minute),
 			AutoCompact:      &autoCompact,
 			CompactThreshold: 0.7,
 		},

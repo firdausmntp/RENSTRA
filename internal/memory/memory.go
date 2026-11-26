@@ -233,6 +233,30 @@ func (s *Store) Write(kind Kind, content string) error {
 	return writeAtomic(path, content)
 }
 
+// Append menambahkan satu baris catatan ke kind tanpa menimpa catatan sebelumnya.
+func (s *Store) Append(kind Kind, note string) error {
+	trimmed := strings.TrimSpace(note)
+	if trimmed == "" {
+		return errors.New("catatan tidak boleh kosong")
+	}
+	snap := s.Snapshot()
+	var existing string
+	switch kind {
+	case KindUser:
+		existing = snap.User
+	case KindSoul:
+		existing = snap.Soul
+	default:
+		existing = snap.Memory
+	}
+	existing = strings.TrimRight(existing, "\r\n")
+	next := trimmed
+	if existing != "" {
+		next = existing + "\n" + trimmed
+	}
+	return s.Write(kind, next)
+}
+
 func (s *Store) target(kind Kind) (path string, limit int, err error) {
 	memLim, userLim, soulLim := s.AllLimits()
 	switch kind {

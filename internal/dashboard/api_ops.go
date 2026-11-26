@@ -99,25 +99,6 @@ func (s *Server) handleTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"turns": turns})
 }
 
-func (s *Server) handleTurnDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost || s.opts.Store == nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
-		return
-	}
-	var req struct {
-		ID int64 `json:"id"`
-	}
-	if err := readJSON(r, &req); err != nil || req.ID <= 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id wajib diisi"})
-		return
-	}
-	if err := s.opts.Store.DeleteTurn(r.Context(), req.ID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
 func (s *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Store == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"sessions": []store.ChatSummary{}})
@@ -311,11 +292,12 @@ func (s *Server) handleModelAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Model    string `json:"model"`
-		Provider string `json:"provider"`
-		Context  string `json:"context"`
-		Vision   bool   `json:"vision"`
-		Alias    string `json:"alias"`
+		Model     string `json:"model"`
+		Provider  string `json:"provider"`
+		Context   string `json:"context"`
+		MaxOutput string `json:"max_output"`
+		Vision    *bool  `json:"vision"`
+		Alias     string `json:"alias"`
 	}
 	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Model) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "nama model wajib diisi"})
@@ -339,8 +321,15 @@ func (s *Server) handleModelAdd(w http.ResponseWriter, r *http.Request) {
 		if strings.TrimSpace(req.Context) != "" {
 			args = append(args, strings.TrimSpace(req.Context))
 		}
-		if req.Vision {
-			args = append(args, "vision")
+		if strings.TrimSpace(req.MaxOutput) != "" {
+			args = append(args, strings.TrimSpace(req.MaxOutput))
+		}
+		if req.Vision != nil {
+			if *req.Vision {
+				args = append(args, "vision")
+			} else {
+				args = append(args, "novision")
+			}
 		}
 		if strings.TrimSpace(req.Alias) != "" && len(parts) == 1 {
 			args = append(args, "alias="+strings.TrimSpace(req.Alias))

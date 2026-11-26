@@ -30,6 +30,7 @@ func DefaultCommands() []BotCommand {
 		{Command: "usage", Description: "Cek token & estimasi biaya hari ini"},
 		{Command: "insights", Description: "Ringkasan pemakaian harian, 7 & 30 hari"},
 		{Command: "compact", Description: "Kompaksi ringkasan riwayat sekarang"},
+		{Command: "service", Description: "Cek status atau restart service & muat ulang config"},
 		{Command: "version", Description: "Tampilkan versi binary RENSTRA"},
 	}
 }

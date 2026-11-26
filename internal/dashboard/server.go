@@ -56,6 +56,7 @@ type Options struct {
 	SetDefaultModelRun func(ref string) error
 	ReloadConfig       func(cfg *config.Config)
 	ReloadMCP          func()
+	RestartService     func(reason string) error
 	RunChat            func(ctx context.Context, chatID int64, prompt string) (string, error)
 }
 
@@ -107,6 +108,10 @@ func New(opts Options) (*Server, error) {
 	mux.HandleFunc("/api/models/delete", s.withAuth(s.handleModelDelete))
 	mux.HandleFunc("/api/model/default", s.withAuth(s.handleModelDefault))
 	mux.HandleFunc("/api/fallback/reset", s.withAuth(s.handleFallbackReset))
+	mux.HandleFunc("/api/fallback/save", s.withAuth(s.handleFallbackSave))
+	mux.HandleFunc("/api/memory/facts", s.withAuth(s.handleMemoryFacts))
+	mux.HandleFunc("/api/memory/facts/delete", s.withAuth(s.handleMemoryFactDelete))
+	mux.HandleFunc("/api/service/restart", s.withAuth(s.handleServiceRestart))
 	mux.HandleFunc("/api/ui/sync", s.withAuth(s.handleUISync))
 	mux.HandleFunc("/api/ui/reset", s.withAuth(s.handleUIReset))
 	mux.HandleFunc("/api/chat", s.withAuth(s.handleChat))
@@ -181,11 +186,13 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 
 	var dayU, weekU, monthU store.Usage
 	var daily []store.DailyUsage
+	var byModel []store.ModelUsageSummary
 	if s.opts.Store != nil {
 		dayU, _ = s.opts.Store.UsageForDay(ctx, today)
 		weekU, _ = s.opts.Store.UsageSince(ctx, now.AddDate(0, 0, -7))
 		monthU, _ = s.opts.Store.UsageSince(ctx, now.AddDate(0, 0, -30))
 		daily, _ = s.opts.Store.UsageHistory(ctx, 14)
+		byModel, _ = s.opts.Store.ModelUsageSince(ctx, now.AddDate(0, 0, -30))
 	}
 	var errCnt, warnCnt int64
 	var buffered int
@@ -214,26 +221,35 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, uiSrc, uiVer := s.activeUIFS()
+	var fbCfg []string
+	smartFB := false
+	if s.opts.Config != nil {
+		fbCfg = s.opts.Config.Fallbacks
+		smartFB = s.opts.Config.SmartFallbackEnabled()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":        s.opts.Version,
-		"api_version":    CurrentAPIVersion,
-		"ui_source":      uiSrc,
-		"ui_version":     uiVer,
-		"uptime_sec":     int64(time.Since(s.opts.StartedAt).Seconds()),
-		"started_at":     s.opts.StartedAt.Format(time.RFC3339),
-		"active_model":   activeModel,
-		"provider":       provKind,
-		"context_window": ctxWin,
-		"skills_count":   skillsCount,
-		"error_count":    errCnt,
-		"warn_count":     warnCnt,
-		"log_buffered":   buffered,
-		"usage_today":    dayU,
-		"usage_7d":       weekU,
-		"usage_30d":      monthU,
-		"daily_usage":    daily,
-		"fallbacks":      fallbacks,
-		"auth_required":  strings.TrimSpace(s.opts.Token) != "",
+		"version":          s.opts.Version,
+		"api_version":      CurrentAPIVersion,
+		"ui_source":        uiSrc,
+		"ui_version":       uiVer,
+		"uptime_sec":       int64(time.Since(s.opts.StartedAt).Seconds()),
+		"started_at":       s.opts.StartedAt.Format(time.RFC3339),
+		"active_model":     activeModel,
+		"provider":         provKind,
+		"context_window":   ctxWin,
+		"skills_count":     skillsCount,
+		"error_count":      errCnt,
+		"warn_count":       warnCnt,
+		"log_buffered":     buffered,
+		"usage_today":      dayU,
+		"usage_7d":         weekU,
+		"usage_30d":        monthU,
+		"daily_usage":      daily,
+		"usage_by_model":   byModel,
+		"fallbacks":        fallbacks,
+		"fallbacks_config": fbCfg,
+		"smart_fallback":   smartFB,
+		"auth_required":    strings.TrimSpace(s.opts.Token) != "",
 	})
 }
 

@@ -12,6 +12,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"renstra/internal/config"
 	"renstra/internal/store"
 )
 
@@ -217,6 +218,103 @@ func (s *Server) handleMCPDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.opts.ReloadMCP != nil {
 		s.opts.ReloadMCP()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleFallbackSave(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	var req struct {
+		Fallbacks     string `json:"fallbacks"`
+		SmartFallback *bool  `json:"smart_fallback"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	rawList := strings.FieldsFunc(req.Fallbacks, func(c rune) bool {
+		return c == ',' || c == '\n' || c == '\r'
+	})
+	cfg := s.opts.Config
+	updated, err := config.SaveFallbacks(rawList, req.SmartFallback, cfg)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.opts.Config = updated
+	if s.opts.ReloadConfig != nil {
+		s.opts.ReloadConfig(updated)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "fallbacks": updated.Fallbacks, "smart_fallback": updated.SmartFallbackEnabled()})
+}
+
+func (s *Server) handleMemoryFacts(w http.ResponseWriter, r *http.Request) {
+	if s.opts.Store == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"facts": []store.MemoryFact{}})
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	facts, err := s.opts.Store.SearchMemoryFacts(r.Context(), "", q, 50)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"facts": facts})
+}
+
+func (s *Server) handleMemoryFactDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || s.opts.Store == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := readJSON(r, &req); err != nil || req.ID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id wajib diisi"})
+		return
+	}
+	if err := s.opts.Store.DeleteMemoryFact(r.Context(), req.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "POST required"})
+		return
+	}
+	if s.opts.RestartService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "restart service hanya tersedia di mode serve"})
+		return
+	}
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		_ = s.opts.RestartService("Web Dashboard")
+	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "Service sedang di-restart & config baru akan dimuat..."})
+}
+
+func (s *Server) handleTurnDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || s.opts.Store == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := readJSON(r, &req); err != nil || req.ID <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "id wajib diisi"})
+		return
+	}
+	if err := s.opts.Store.DeleteTurn(r.Context(), req.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

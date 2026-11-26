@@ -92,14 +92,19 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 }
 
 func (r *Runner) recordUsage(u *provider.Usage) {
-	r.recordUsageWithPrices(u, r.PriceIn, r.PriceOut)
+	r.recordUsageWithPrices(u, r.GetModel(), r.PriceIn, r.PriceOut)
 }
 
-func (r *Runner) recordUsageWithPrices(u *provider.Usage, priceIn, priceOut float64) {
+func (r *Runner) recordUsageWithPrices(u *provider.Usage, model string, priceIn, priceOut float64) {
 	cost := (float64(u.InputTokens)/1e6)*priceIn + (float64(u.OutputTokens)/1e6)*priceOut
 	ctx, cancel := context.WithTimeout(context.Background(), saveTimeout)
 	defer cancel()
-	_ = r.Store.RecordUsage(ctx, time.Now().Format("2006-01-02"), int64(u.InputTokens), int64(u.OutputTokens), cost)
+	day := time.Now().Format("2006-01-02")
+	_ = r.Store.RecordUsage(ctx, day, int64(u.InputTokens), int64(u.OutputTokens), cost)
+	if model == "" {
+		model = r.GetModel()
+	}
+	_ = r.Store.RecordModelUsage(ctx, day, model, int64(u.InputTokens), int64(u.OutputTokens), cost)
 }
 
 func (r *Runner) savePartial(chatID int64, text string) {

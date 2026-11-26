@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -32,6 +33,38 @@ func WithChatID(ctx context.Context, id int64) context.Context {
 func ChatIDFrom(ctx context.Context) int64 {
 	id, _ := ctx.Value(chatIDKey{}).(int64)
 	return id
+}
+
+type deliveryKey struct{}
+
+type deliveryTracker struct {
+	mu    sync.Mutex
+	chats map[int64]bool
+}
+
+// WithDeliveryTracker attaches a per-turn map tracking which chatIDs already
+// received a direct message via tools like send_telegram.
+func WithDeliveryTracker(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deliveryKey{}, &deliveryTracker{chats: map[int64]bool{}})
+}
+
+// MarkChatDelivered records that chatID received a tool-delivered message in this turn.
+func MarkChatDelivered(ctx context.Context, chatID int64) {
+	if dt, ok := ctx.Value(deliveryKey{}).(*deliveryTracker); ok && dt != nil && chatID != 0 {
+		dt.mu.Lock()
+		dt.chats[chatID] = true
+		dt.mu.Unlock()
+	}
+}
+
+// WasChatDelivered reports whether chatID already received a direct message via tool in this turn.
+func WasChatDelivered(ctx context.Context, chatID int64) bool {
+	if dt, ok := ctx.Value(deliveryKey{}).(*deliveryTracker); ok && dt != nil && chatID != 0 {
+		dt.mu.Lock()
+		defer dt.mu.Unlock()
+		return dt.chats[chatID]
+	}
+	return false
 }
 
 type Registry struct {

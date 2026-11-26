@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"renstra/internal/config"
 	"renstra/internal/telegram"
 )
 
@@ -66,6 +68,15 @@ func (h *telegramHandler) HandleCallback(ctx context.Context, chatID, msgID int6
 
 	case "acc":
 		h.handleAccountCallback(ctx, chatID, msgID, parts)
+
+	case "svc":
+		if len(parts) >= 2 && parts[1] == "restart" {
+			_ = h.bot.EditMessage(ctx, chatID, msgID, "🔄 Me-restart service RENSTRA & memuat ulang konfigurasi...")
+			go func() {
+				time.Sleep(300 * time.Millisecond)
+				_ = triggerSelfRestart(config.Home(), chatID, "Inline button /service restart")
+			}()
+		}
 
 	case "mdl":
 		if len(parts) < 3 {

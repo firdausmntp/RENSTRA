@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -35,6 +36,9 @@ func serveCmd(args []string) error {
 		return err
 	}
 
+	if ms, err := strconv.Atoi(os.Getenv("RENSTRA_RESTART_DELAY_MS")); err == nil && ms > 0 && ms <= 5000 {
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+	}
 	home := config.Home()
 	cfgPath := filepath.Join(home, "config.yaml")
 
@@ -191,6 +195,8 @@ func serveCmd(args []string) error {
 	webFetchTool := tool.NewWebFetch()
 	webFetchTool.AllowPrivate = cfg.Tools.AllowPrivateFetch
 
+	memTool := tool.NewMemory(memStore)
+	memTool.SetFactStore(st)
 	candidates := []tool.Tool{
 		tool.NewTerminal(workspace, 0),
 		tool.NewReadFile(workspace),
@@ -198,7 +204,7 @@ func serveCmd(args []string) error {
 		patchTool,
 		webFetchTool,
 		tool.NewWebSearch(),
-		tool.NewMemory(memStore),
+		memTool,
 		tool.NewSkill(skillReg),
 		tool.NewCron(st, 0),
 		tool.NewDelegate(runner, 0),
@@ -317,6 +323,10 @@ func serveCmd(args []string) error {
 		defer cleanupPID()
 	}
 
+	mcpToolCount := 0
+	for _, s := range mcpServers {
+		mcpToolCount += len(s.Tools)
+	}
 	dashAddr := startDashboardServer(ctx, cfg, sflags, home, st, memStore, skillReg, runner, handler, logHub, logger)
 	if dashAddr != "" {
 		handler.dashAddr = dashAddr
@@ -325,5 +335,12 @@ func serveCmd(args []string) error {
 	} else {
 		fmt.Printf("renstra gateway berjalan (model: %s). Tekan Ctrl+C untuk berhenti.\n", model)
 	}
+	notifyRestartReady(ctx, bot, st, cfg, home, model, pcfg.Kind, mc.Context, len(mcpServers), mcpToolCount, len(skillReg.Names()), dashAddr)
+	go func() {
+		<-ctx.Done()
+		if _, err := os.Stat(filepath.Join(home, restartNotifyFile)); os.IsNotExist(err) {
+			writeRestartNotify(home, 0, "System / signal restart")
+		}
+	}()
 	return bot.Run(ctx, handler)
 }

@@ -71,15 +71,23 @@ func restartCmd(args []string, out io.Writer) error {
 		}
 	}
 
+	home := config.Home()
+	writeRestartNotify(home, 0, "CLI renstra restart")
+
 	// 1. Check systemd service on Linux first.
 	if runtime.GOOS == "linux" {
 		if handled, err := restartSystemdService(w); handled {
+			if err == nil {
+				if stalePID, alive := readLivePID(home); alive && stalePID != os.Getpid() {
+					_ = stopProcess(stalePID, 3*time.Second)
+					_ = os.Remove(pidFilePath(home))
+				}
+			}
 			return err
 		}
 	}
 
 	// 2. Check standalone `renstra serve` via PID file in $RENSTRA_HOME.
-	home := config.Home()
 	if pid, alive := readLivePID(home); alive {
 		fmt.Fprintf(w, "%s🔄 Menghentikan renstra serve (PID %d)...%s\n", cli.ColorYellow, pid, cli.ColorReset)
 		if err := stopProcess(pid, 5*time.Second); err != nil {

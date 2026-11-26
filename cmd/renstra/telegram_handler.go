@@ -149,26 +149,7 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		return "Sesi baru dimulai (restart). Catatan memori di-freeze ulang dan riwayat diputus.", nil
 
 	case "/usage":
-		today := time.Now().Format("2006-01-02")
-		u, err := h.store.UsageForDay(ctx, today)
-		if err != nil {
-			return "", fmt.Errorf("gagal membaca kuota: %w", err)
-		}
-		var b strings.Builder
-		fmt.Fprintf(&b, "Penggunaan Hari Ini (%s):\n- Token Masuk: %d\n- Token Keluar: %d\n- Estimasi Biaya: $%.4f USD",
-			today, u.TokensIn, u.TokensOut, u.CostUSD)
-		if h.cfg != nil {
-			if h.cfg.Limits.WarnDailyUSD > 0 {
-				fmt.Fprintf(&b, "\n- Batas Peringatan: $%.2f USD/hari", h.cfg.Limits.WarnDailyUSD)
-			}
-			if h.cfg.Limits.MaxDailyUSD > 0 {
-				fmt.Fprintf(&b, "\n- Batas Maks Biaya: $%.2f USD/hari", h.cfg.Limits.MaxDailyUSD)
-			}
-			if h.cfg.Limits.MaxDailyTokens > 0 {
-				fmt.Fprintf(&b, "\n- Batas Maks Token: %d token/hari", h.cfg.Limits.MaxDailyTokens)
-			}
-		}
-		return b.String(), nil
+		return h.handleUsageCmd(ctx)
 
 	case "/insights":
 		now := time.Now()
@@ -291,6 +272,9 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 	case "/backup":
 		return h.handleBackupCmd(ctx, chatID)
 
+	case "/service":
+		return h.handleServiceCmd(ctx, chatID, arg)
+
 	case "/dashboard":
 		if h.dashAddr == "" {
 			return "📊 Web Dashboard tidak aktif. Jalankan `renstra serve --dashboard-port 8080` untuk mengaktifkannya.", nil
@@ -385,6 +369,9 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 		}
 		if err == nil && sw.Finalize(ctx, reply) {
 			return "", nil
+		}
+		if err != nil {
+			sw.CleanupOnError(context.Background())
 		}
 		return reply, err
 	}

@@ -4,6 +4,26 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.4.0 (Long-Horizon Reliability, Smart Episodic Memory, Enhanced Dashboard Analytics & Clean Service Restart Notification)
+
+- [x] **Long-Horizon Engine & Fix Timeout/Status Error Setelah Pengiriman Laporan**
+  - **Lokasi:** [`internal/agent/runner.go`](internal/agent/runner.go), [`internal/config/config.go`](internal/config/config.go), [`internal/tool/tool.go`](internal/tool/tool.go), [`internal/tool/send_telegram.go`](internal/tool/send_telegram.go)
+  - **Perbaikan:** Menaikkan batas bawaan ke `80` iterasi dan `30m` turn timeout, menyuntikkan soft wrap-up nudge menjelang batas iterasi/waktu, melacak pengiriman via `send_telegram` (`WasChatDelivered`) agar timeout pasca-laporan tidak mengirim error & `.log` palsu, serta menyimpan checkpoint langkah.
+- [x] **Progress Thinking & Tool Eksekusi Jelas di Telegram**
+  - **Lokasi:** [`internal/telegram/stream.go`](internal/telegram/stream.go), [`internal/telegram/stream_helpers.go`](internal/telegram/stream_helpers.go), [`cmd/renstra/telegram_handler.go`](cmd/renstra/telegram_handler.go)
+  - **Perbaikan:** Menambahkan indikator langkah `🧭 Langkah X/Y · elapsed`, breadcrumb tool selesai (`✓ tool`), pemisahan paragraf thinking antar iterasi, pembersihan pesan draft `⏳` saat selesai (`Finalize` / `CleanupOnError`), dan pesan `✅ Selesai (laporan terkirim)` bila output dikirim langsung via `send_telegram`.
+- [x] **Smart AI Agent Memory (SQLite Episodic Facts + Auto-Recall Otomatis)**
+  - **Lokasi:** [`internal/store/memory_facts.go`](internal/store/memory_facts.go), [`internal/tool/agent_tools.go`](internal/tool/agent_tools.go), [`internal/agent/runner.go`](internal/agent/runner.go)
+  - **Fitur:** Menambah tabel `memory_facts` dengan ranking BM25/trigram, memperluas tool `memory` dengan action `append|delete|remember|recall` (scoped `global` / `chat`), serta auto-recall memori relevan secara otomatis ke context prompt pada setiap turn baru.
+- [x] **Upgrade Web Dashboard: Detailed Logs, Per-Model Token Analytics, Fallback Chain & Smart Memory**
+  - **Lokasi:** [`internal/store/usage_models.go`](internal/store/usage_models.go), [`internal/dashboard/server.go`](internal/dashboard/server.go), [`internal/dashboard/api_chat.go`](internal/dashboard/api_chat.go), [`internal/config/account.go`](internal/config/account.go), [`internal/dashboard/ui/`](internal/dashboard/ui/index.html)
+  - **Fitur:** Modal detail Log JSON lengkap + Copy + quick event presets, tabel **Token Consumption by Model (30 Days)** (`Requests`, `Tokens In`, `Tokens Out`, `Est. Cost`), editor **Fallback Chain & Smart Routing** (`POST /api/fallback/save`), inspector **Smart Episodic Memory Facts**, serta tombol **Restart Service** di topbar.
+- [x] **Perbaikan `renstra service` / `renstra restart` + Notifikasi Konfigurasi ke Telegram & `/service`**
+  - **Lokasi:** [`cmd/renstra/service_notify.go`](cmd/renstra/service_notify.go), [`cmd/renstra/restart.go`](cmd/renstra/restart.go), [`cmd/renstra/serve.go`](cmd/renstra/serve.go), [`cmd/renstra/telegram_callbacks.go`](cmd/renstra/telegram_callbacks.go), [`internal/telegram/commands.go`](internal/telegram/commands.go)
+  - **Fitur:** Restart service (systemd, standalone PID, Dashboard, & `/service restart`) membersihkan proses lama, memuat konfigurasi baru, dan otomatis mengirim notifikasi lengkap ke Telegram setelah proses baru aktif (termasuk versi, PID, model, context window, fallback, MCP, skills, & URL dashboard).
+
+---
+
 ## Rilis v1.3.5 (Hybrid Semantic Search, Web Chat Playground, Backup & Restore `.tar.gz`, MCP Studio, Multi-Model per Provider & `react_message`)
 
 - [x] **Hybrid BM25 + Trigram/Morphological Semantic Search & Cross-Chat `session_search`**

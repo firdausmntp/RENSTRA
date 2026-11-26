@@ -3,6 +3,10 @@
 .sidebar {
   width: 236px;
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
@@ -44,15 +48,16 @@
 
 .main { flex: 1; min-width: 0; padding: 20px 26px; overflow-y: auto; max-width: 1420px; }
 .topbar {
-  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px 14px; flex-wrap: wrap;
   padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--border);
 }
-.topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.topbar h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
+.topbar-left { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
+.topbar-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; flex-shrink: 0; }
+.topbar h1 { margin: 0; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; }
 .chip {
   background: var(--surface); border: 1px solid var(--border); padding: 3px 9px;
   border-radius: 4px; font-size: 12px; color: var(--muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 72px; max-width: 240px; flex-shrink: 1;
 }
 
 .tab-panel { display: none; flex-direction: column; gap: 16px; }
@@ -73,7 +78,7 @@
 @media (max-width: 820px) {
   .menu-btn, .drawer-close { display: inline-flex !important; }
   .sidebar {
-    position: fixed; top: 0; left: 0; bottom: 0; width: 264px;
+    position: fixed; top: 0; left: 0; bottom: 0; width: 264px; height: auto;
     transform: translateX(-100%);
     transition: transform 240ms var(--ease-drawer);
     overscroll-behavior: contain;
@@ -89,12 +94,18 @@
   .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
 }
 
+/* Compact topbar buttons on narrow screens (<= 680px) */
+@media (max-width: 680px) {
+  .topbar-actions .btn-lbl { display: none; }
+  .topbar-actions .btn-ico { padding: 6px 8px; }
+}
+
 /* Phone compact layout (<= 600px) */
 @media (max-width: 600px) {
   .main { padding: 12px 14px; }
   .topbar { padding-bottom: 10px; margin-bottom: 14px; }
-  .topbar h1 { font-size: 18px; }
-  .chip { max-width: 120px; font-size: 11px; }
+  .topbar h1 { font-size: 17px; }
+  .chip { max-width: 110px; font-size: 11px; }
   .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .kpi-val { font-size: 19px; }
 }

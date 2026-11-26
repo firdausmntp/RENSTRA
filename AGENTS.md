@@ -184,9 +184,15 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.3.5)
+## 7. Status Rilis & Pengembangan (v1.4.0)
 
-Fitur & pembaruan v1.3.5:
+Fitur & pembaruan v1.4.0:
+1. **Long-Horizon & Bugfix Turn Timeout Pasca-Pengiriman (`internal/agent/runner.go`, `internal/telegram/stream.go`):** Default `80` iterasi / `30m`, soft wrap-up nudge, tracking `send_telegram` delivery (`WasChatDelivered`) agar tidak mengirim error/log palsu saat timeout pasca-laporan, indikator `🧭 Langkah X/Y` + breadcrumb tool, dan `CleanupOnError` agar draft `⏳` tidak menggantung.
+2. **Smart AI Agent Memory (`internal/store/memory_facts.go`, `internal/tool/agent_tools.go`):** Fakta episodik persisten tanpa batas 2200 char dengan ranking BM25 + trigram (`remember`/`recall`/`append`/`delete`) serta auto-recall otomatis di awal setiap turn.
+3. **Dashboard Analytics, Detailed Logs & Fallback Manager (`internal/store/usage_models.go`, `internal/dashboard/`):** Modal detail JSON log + preset filter, tabel konsumsi token & biaya per model (`usage_by_model`), editor Fallback Chain + Smart Routing, viewer Smart Memory Facts, dan tombol Restart Service.
+4. **Service Lifecycle & Notifikasi Telegram (`cmd/renstra/service_notify.go`, `cmd/renstra/restart.go`, `/service`):** `renstra service [status|restart|start|stop]`, `/service` + inline button, serta notifikasi otomatis ke Telegram setiap service selesai restart dan memuat konfigurasi baru.
+
+Fitur v1.3.5 sebelumnya:
 1. **Hybrid BM25 + Trigram Semantic Search (`internal/store/search.go`):** Pencarian histori percakapan (`session_search`) menggunakan ranking BM25 + Character Trigram Jaccard + pencocokan prefix/morfologi serta opsi `all_chats: true`.
 2. **Web Chat Playground (`/chat`), MCP Studio & Multi-Model per Provider (`internal/dashboard/api_chat.go`):** Uji chat/command langsung dari browser (`POST /api/chat`), kelola `mcp.yaml` dari Web Dashboard, serta tambah banyak Model ID sekaligus (dipisah koma) yang dikelompokkan per provider.
 3. **Safe Backup & Restore (`.tar.gz`), Historical Topic Harvester & `react_message` (`internal/store/backup.go`):** `renstra backup` / `GET /api/backup` (`VACUUM INTO` SQLite) & `renstra restore`, auto-harvest topik forum lama dari histori SQLite, serta reaksi emoji pesan (`react_message`).

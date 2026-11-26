@@ -166,6 +166,9 @@ func startDashboardServer(ctx context.Context, cfg *config.Config, flags serveFl
 			handler.mu.Unlock()
 			handler.invalidateAllPrompts()
 		},
+		RestartService: func(reason string) error {
+			return triggerSelfRestart(home, 0, reason)
+		},
 		RunChat: func(rctx context.Context, chatID int64, prompt string) (string, error) {
 			return handler.Handle(agent.WithUnattended(rctx), chatID, prompt)
 		},

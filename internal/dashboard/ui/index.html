@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RENSTRA Control Plane</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.3.5" />
-  <link rel="stylesheet" href="/styles/layout.css?v=1.3.5" />
-  <link rel="stylesheet" href="/styles/components.css?v=1.3.5" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.4.0" />
+  <link rel="stylesheet" href="/styles/layout.css?v=1.4.0" />
+  <link rel="stylesheet" href="/styles/components.css?v=1.4.0" />
 </head>
 <body>
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
@@ -99,15 +99,19 @@
           <input type="file" id="inp-restore-file" accept=".tar.gz,.tgz,application/gzip" class="hidden" />
           <button class="btn btn-ghost btn-ico" id="btn-restore" title="Restore Backup tar.gz">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.5v-8M5 5.5l3-3 3 3M3 13h10"/></svg>
-            Restore
+            <span class="btn-lbl">Restore</span>
           </button>
           <button class="btn btn-ghost btn-ico" id="btn-backup" title="Download tar.gz Backup (DB + Config + Memory + Skills)">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13h10"/></svg>
-            Backup
+            <span class="btn-lbl">Backup</span>
           </button>
-          <button class="btn btn-ghost btn-ico" id="btn-refresh">
+          <button class="btn btn-ghost btn-ico" id="btn-restart-svc" title="Restart Service &amp; Reload Config">
+            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v4M4.8 4.2a5.5 5.5 0 1 0 6.4 0"/></svg>
+            <span class="btn-lbl">Restart</span>
+          </button>
+          <button class="btn btn-ghost btn-ico" id="btn-refresh" title="Refresh">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.7M13.5 2.5v3h-3"/></svg>
-            Refresh
+            <span class="btn-lbl">Refresh</span>
           </button>
           <button class="btn btn-ghost hidden" id="btn-logout">Logout</button>
         </div>
@@ -152,6 +156,16 @@
         </div>
 
         <div class="card">
+          <div class="card-head"><h2>Token Consumption by Model (30 Days)</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total</th><th>Est. Cost</th></tr></thead>
+              <tbody id="ov-model-usage-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
           <div class="card-head"><h2>Recent Turns</h2></div>
           <div class="table-wrap">
             <table>
@@ -170,6 +184,12 @@
               <button class="btn btn-sm" data-level="ERROR">ERROR</button>
               <button class="btn btn-sm" data-level="WARN">WARN</button>
               <button class="btn btn-sm" data-level="INFO">INFO</button>
+            </div>
+            <div class="btn-group" id="log-preset-tabs">
+              <button class="btn btn-sm active" data-preset="">All Events</button>
+              <button class="btn btn-sm" data-preset="turn_finished">Turns</button>
+              <button class="btn btn-sm" data-preset="smart_fallback">Fallbacks</button>
+              <button class="btn btn-sm" data-preset="tool_approval">Approvals</button>
             </div>
             <input type="text" id="log-search" class="input mono" placeholder="Filter message, chat_id, model, or error..." />
             <span class="muted mono" id="log-count">0 entries</span>
@@ -255,6 +275,13 @@
             </div>
           </div>
         </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Smart Episodic Memory Facts (SQLite)</h2>
+            <input type="text" id="mem-fact-search" class="input mono" placeholder="Search episodic facts..." style="max-width:260px;" />
+          </div>
+          <div id="memory-facts-list" class="list-box"></div>
+        </div>
       </section>
 
       <section class="tab-panel" id="tab-accounts">
@@ -282,10 +309,13 @@
                   <option value="ollama">ollama</option>
                 </select>
               </label>
-              <label>API Key (.env) <input class="input mono" name="api_key" type="password" placeholder="sk-..." required /></label>
+              <label>API Key (.env — kosongkan saat Edit bila tidak mengubah key) <input class="input mono" name="api_key" type="password" placeholder="sk-... (optional on edit)" /></label>
               <label>Default Model <input class="input mono" name="default_model" placeholder="e.g. anthropic/claude-3.7-sonnet" /></label>
               <label>Base URL (optional) <input class="input mono" name="base_url" placeholder="https://..." /></label>
-              <button class="btn btn-primary" type="submit">Save Account</button>
+              <div class="card-actions" style="margin-top:4px;">
+                <button class="btn btn-ghost btn-sm" type="button" id="btn-acc-reset">Clear</button>
+                <button class="btn btn-primary" type="submit" id="btn-acc-submit">Save Account</button>
+              </div>
             </form>
             <hr class="sep" />
             <div class="card-head"><h2>Default Active Model</h2></div>
@@ -302,6 +332,15 @@
               <label>Context Window <input class="input mono" name="context" placeholder="e.g. 128k / 200k / 1M" /></label>
               <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" checked /> Support Vision (gambar)</label>
               <button class="btn btn-sm btn-ghost" type="submit">Add Model(s)</button>
+            </form>
+            <hr class="sep" />
+            <form id="form-fallbacks" class="form-stack">
+              <div class="card-head"><h2>Fallback Chain &amp; Smart Routing</h2></div>
+              <label>Fallback Targets (pisah koma atau baris baru, urut prioritas)
+                <textarea class="editor mono" id="fb-list-input" name="fallbacks" rows="3" placeholder="openai:gpt-4o-mini, anthropic:claude-3-5-sonnet-latest"></textarea>
+              </label>
+              <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" id="fb-smart-chk" name="smart_fallback" /> Auto Smart Fallback (context + vision discovery)</label>
+              <button class="btn btn-sm btn-primary" type="submit">Save Fallbacks</button>
             </form>
           </div>
         </div>
@@ -401,6 +440,40 @@
     </div>
   </div>
 
+  <div class="modal" id="log-detail-modal" aria-hidden="true">
+    <div class="modal-card">
+      <div class="card-head">
+        <h2 id="log-detail-title">Log Details</h2>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-ghost" id="btn-log-copy">Copy JSON</button>
+          <button class="btn btn-sm btn-ghost" id="btn-log-detail-close">Close</button>
+        </div>
+      </div>
+      <pre id="log-detail-body" class="editor mono" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+    </div>
+  </div>
+
+  <div class="modal" id="model-edit-modal" aria-hidden="true">
+    <div class="modal-card">
+      <div class="card-head">
+        <h2 id="model-edit-title">Edit Model</h2>
+        <button class="btn btn-sm btn-ghost" id="btn-model-edit-close">Close</button>
+      </div>
+      <form id="form-model-edit" class="form-stack">
+        <input type="hidden" name="old_ref" id="me-old-ref" />
+        <label>Provider <input class="input mono" name="provider" id="me-provider" list="provider-names-list" required /></label>
+        <label>Model ID <input class="input mono" name="model" id="me-model" required /></label>
+        <label>Context Window <input class="input mono" name="context" id="me-context" placeholder="e.g. 128000 / 200k / 1M" /></label>
+        <label>Max Output Tokens <input class="input mono" name="max_output" id="me-max-output" placeholder="e.g. 8192" /></label>
+        <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" id="me-vision" /> Support Vision (gambar)</label>
+        <div class="card-actions">
+          <button class="btn btn-ghost" type="button" id="btn-model-edit-cancel">Cancel</button>
+          <button class="btn btn-primary" type="submit">Save Model</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="auth-screen" id="auth-modal" aria-hidden="true">
     <div class="auth-card">
       <div class="auth-head">
@@ -422,6 +495,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/js/app.js?v=1.3.5"></script>
+  <script type="module" src="/js/app.js?v=1.4.0"></script>
 </body>
 </html>

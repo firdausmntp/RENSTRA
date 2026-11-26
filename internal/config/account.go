@@ -237,3 +237,33 @@ func defaultModelNameForKind(kind string) string {
 		return "gpt-4o-mini"
 	}
 }
+
+// SaveFallbacks updates config.yaml fallback list and smart_fallback toggle.
+func SaveFallbacks(fallbacks []string, smart *bool, cfg *Config) (*Config, error) {
+	if cfg == nil {
+		var err error
+		cfg, err = Load()
+		if err != nil {
+			return nil, err
+		}
+	}
+	var cleaned []string
+	seen := map[string]bool{}
+	for _, f := range fallbacks {
+		f = strings.TrimSpace(f)
+		if f == "" || seen[f] {
+			continue
+		}
+		seen[f] = true
+		cleaned = append(cleaned, f)
+	}
+	cfg.Fallbacks = cleaned
+	if smart != nil {
+		v := *smart
+		cfg.SmartFallback = &v
+	}
+	if err := saveConfigStruct(cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}

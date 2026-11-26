@@ -1,8 +1,8 @@
-import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.3.5';
+import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.4.0';
 import {
   loadOverview, loadLogs, renderLogs,
   loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions, loadChatPlayground
-} from './views.js?v=1.3.5';
+} from './views.js?v=1.4.0';
 
 function openDrawer(open) {
   $('#sidebar').classList.toggle('open', open);
@@ -117,6 +117,32 @@ $('#log-level-tabs').addEventListener('click', (e) => {
   renderLogs();
 });
 $('#log-search').addEventListener('input', (e) => { state.search = e.target.value; renderLogs(); });
+$('#log-preset-tabs')?.addEventListener('click', (e) => {
+  if (e.target.dataset.preset === undefined) return;
+  $$('#log-preset-tabs .btn').forEach((b) => b.classList.remove('active'));
+  e.target.classList.add('active');
+  $('#log-search').value = e.target.dataset.preset;
+  state.search = e.target.dataset.preset;
+  renderLogs();
+});
+$('#log-list')?.addEventListener('click', (e) => {
+  const row = e.target.closest('.log-row');
+  if (!row || row.dataset.logIdx === undefined) return;
+  const entry = (state.filteredLogs || [])[Number(row.dataset.logIdx)];
+  if (!entry) return;
+  $('#log-detail-title').textContent = `${entry.level || 'INFO'}: ${entry.message || 'Log Entry'}`;
+  $('#log-detail-body').textContent = JSON.stringify(entry, null, 2);
+  $('#log-detail-modal').classList.add('open');
+  $('#log-detail-modal').setAttribute('aria-hidden', 'false');
+});
+$('#btn-log-detail-close')?.addEventListener('click', () => {
+  $('#log-detail-modal').classList.remove('open');
+  $('#log-detail-modal').setAttribute('aria-hidden', 'true');
+});
+$('#btn-log-copy')?.addEventListener('click', async () => {
+  await navigator.clipboard?.writeText($('#log-detail-body').textContent || '');
+  toast('Log JSON copied');
+});
 $('#btn-log-pause').addEventListener('click', () => {
   state.paused = !state.paused;
   $('#btn-log-pause').textContent = state.paused ? 'Resume' : 'Pause';
@@ -216,6 +242,14 @@ $('#btn-save-limit').addEventListener('click', async () => {
   toast('Memory quota updated');
   await loadMemory();
 });
+$('#mem-fact-search')?.addEventListener('input', loadMemory);
+$('#memory-facts-list')?.addEventListener('click', async (e) => {
+  const id = e.target.dataset.delFact;
+  if (!id || !confirm(`Delete smart memory fact #${id}?`)) return;
+  await api('/api/memory/facts/delete', { method: 'POST', body: JSON.stringify({ id: Number(id) }) });
+  toast(`Fact #${id} deleted`);
+  await loadMemory();
+});
 
 $('#ov-turns-body').addEventListener('click', async (e) => {
   const id = e.target.dataset.delTurn;
@@ -226,6 +260,21 @@ $('#ov-turns-body').addEventListener('click', async (e) => {
 });
 
 $('#accounts-list').addEventListener('click', async (e) => {
+  const editName = e.target.dataset.editAccount;
+  if (editName) {
+    const acc = (state.accounts || []).find((a) => a.Name === editName);
+    if (!acc) return;
+    const f = $('#form-account');
+    f.name.value = acc.Name;
+    f.kind.value = acc.Kind || 'openai';
+    f.api_key.value = '';
+    f.default_model.value = acc.DefaultModel || '';
+    f.base_url.value = acc.BaseURL || '';
+    if ($('#btn-acc-submit')) $('#btn-acc-submit').textContent = 'Update Account';
+    f.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast(`Editing account "${acc.Name}"`);
+    return;
+  }
   const name = e.target.dataset.delAccount;
   if (name && confirm(`Delete account "${name}"?`)) {
     await api('/api/accounts/delete', { method: 'POST', body: JSON.stringify({ name }) });
@@ -233,12 +282,17 @@ $('#accounts-list').addEventListener('click', async (e) => {
     await loadAccounts();
   }
 });
+$('#btn-acc-reset')?.addEventListener('click', () => {
+  $('#form-account').reset();
+  if ($('#btn-acc-submit')) $('#btn-acc-submit').textContent = 'Save Account';
+});
 $('#form-account').addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(e.target);
   await api('/api/accounts', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd.entries())) });
   e.target.reset();
-  toast('Account & API key saved');
+  if ($('#btn-acc-submit')) $('#btn-acc-submit').textContent = 'Save Account';
+  toast('Account saved');
   await loadAccounts();
 });
 $('#btn-set-model').addEventListener('click', async () => {
@@ -271,12 +325,49 @@ $('#models-detail-list')?.addEventListener('click', async (e) => {
     await Promise.all([loadAccounts(), loadOverview()]);
     return;
   }
+  const editRef = e.target.dataset.editModel;
+  if (editRef) {
+    const m = (state.modelDetails || []).find((x) => x.ref === editRef);
+    if (!m) return;
+    $('#model-edit-title').textContent = `Edit Model: ${m.ref}`;
+    $('#me-old-ref').value = m.ref;
+    $('#me-provider').value = m.provider;
+    $('#me-model').value = m.model;
+    $('#me-context').value = String(m.context || 128000);
+    $('#me-max-output').value = String(m.max_output || 4096);
+    $('#me-vision').checked = Boolean(m.vision);
+    $('#model-edit-modal').classList.add('open');
+    $('#model-edit-modal').setAttribute('aria-hidden', 'false');
+    return;
+  }
   const delRef = e.target.dataset.delModel;
   if (delRef && confirm(`Delete model "${delRef}"?`)) {
     await api('/api/models/delete', { method: 'POST', body: JSON.stringify({ ref: delRef }) });
     toast('Model removed');
     await loadAccounts();
   }
+});
+function closeModelEditModal() {
+  $('#model-edit-modal')?.classList.remove('open');
+  $('#model-edit-modal')?.setAttribute('aria-hidden', 'true');
+}
+$('#btn-model-edit-close')?.addEventListener('click', closeModelEditModal);
+$('#btn-model-edit-cancel')?.addEventListener('click', closeModelEditModal);
+$('#form-model-edit')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const oldRef = $('#me-old-ref').value;
+  const provider = $('#me-provider').value.trim();
+  const model = $('#me-model').value.trim();
+  const context = $('#me-context').value.trim();
+  const max_output = $('#me-max-output').value.trim();
+  const vision = $('#me-vision').checked;
+  if (oldRef && oldRef !== `${provider}:${model}`) {
+    await api('/api/models/delete', { method: 'POST', body: JSON.stringify({ ref: oldRef }) }).catch(() => {});
+  }
+  await api('/api/models/add', { method: 'POST', body: JSON.stringify({ provider, model, context, max_output, vision }) });
+  closeModelEditModal();
+  toast(`Model "${provider}:${model}" updated`);
+  await loadAccounts();
 });
 
 function openCronModal(job) {
@@ -358,6 +449,20 @@ $('#sessions-body').addEventListener('click', async (e) => {
 });
 
 $('#btn-refresh').addEventListener('click', refreshActiveTab);
+$('#form-fallbacks')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fallbacks = $('#fb-list-input').value;
+  const smart_fallback = $('#fb-smart-chk').checked;
+  await api('/api/fallback/save', { method: 'POST', body: JSON.stringify({ fallbacks, smart_fallback }) });
+  toast('Fallback chain saved & reloaded');
+  await Promise.all([loadAccounts(), loadOverview()]);
+});
+$('#btn-restart-svc')?.addEventListener('click', async () => {
+  if (!confirm('Restart RENSTRA service to load all latest config & notify Telegram?')) return;
+  await api('/api/service/restart', { method: 'POST' });
+  toast('Service restarting... Page will reload shortly');
+  setTimeout(() => window.location.reload(), 3000);
+});
 $('#form-mcp-add')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const payload = Object.fromEntries(new FormData(e.target).entries());

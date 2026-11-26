@@ -32,6 +32,8 @@ type streamResult struct {
 	streamErr error
 	priceIn   float64
 	priceOut  float64
+	model     string
+	provider  string
 }
 
 // streamWithFallback uses smart capability + circuit-breaker routing across
@@ -225,6 +227,8 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			streamErr: streamErr,
 			priceIn:   target.PriceIn,
 			priceOut:  target.PriceOut,
+			model:     target.Model,
+			provider:  target.Provider.Name(),
 		}, nil
 	}
 

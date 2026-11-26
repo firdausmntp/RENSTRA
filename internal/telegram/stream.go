@@ -2,12 +2,10 @@ package telegram
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 )
 
 const (
@@ -27,6 +25,11 @@ type StreamWriter struct {
 
 	mu            sync.Mutex
 	buf           strings.Builder
+	startedAt     time.Time
+	iter          int
+	maxIter       int
+	recentSteps   []string
+	currentTool   string
 	toolNote      string
 	toolStartedAt time.Time
 	lastEdit      time.Time
@@ -99,12 +102,48 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// SetStep records the current agent iteration and ensures clean paragraph breaks
+// between multi-step thinking blocks.
+func (s *StreamWriter) SetStep(iter, maxIter int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startedAt.IsZero() {
+		s.startedAt = time.Now()
+	}
+	s.iter = iter
+	s.maxIter = maxIter
+	if s.buf.Len() > 0 && !strings.HasSuffix(s.buf.String(), "\n") {
+		s.buf.WriteString("\n\n")
+	}
+}
+
 // OnTool updates the streaming message with the name and brief target of the running tool.
 func (s *StreamWriter) OnTool(name, args string) {
 	s.mu.Lock()
 	if s.closed || s.turnCtx.Err() != nil {
 		s.mu.Unlock()
 		return
+	}
+	if s.startedAt.IsZero() {
+		s.startedAt = time.Now()
+	}
+	if s.currentTool != "" {
+		doneStep := "✓ " + s.currentTool
+		if !s.toolStartedAt.IsZero() {
+			if el := time.Since(s.toolStartedAt).Truncate(time.Second); el >= time.Second {
+				doneStep += fmt.Sprintf(" (%s)", el)
+			}
+		}
+		s.recentSteps = append(s.recentSteps, doneStep)
+		if len(s.recentSteps) > 4 {
+			s.recentSteps = s.recentSteps[len(s.recentSteps)-4:]
+		}
+	}
+	detail := summarizeToolArg(name, args)
+	if detail != "" {
+		s.currentTool = fmt.Sprintf("%s: %s", name, detail)
+	} else {
+		s.currentTool = name
 	}
 	s.toolNote = formatToolNote(name, args)
 	s.toolStartedAt = time.Now()
@@ -150,6 +189,10 @@ func (s *StreamWriter) Finalize(ctx context.Context, finalReply string) bool {
 	if s.msgID == 0 {
 		return false
 	}
+	if strings.TrimSpace(finalReply) == "" {
+		_ = s.bot.EditMessage(ctx, s.chatID, s.msgID, "✅ Selesai (laporan terkirim).")
+		return true
+	}
 	chunks := SplitMessage(finalReply, MaxMessageLength)
 	if len(chunks) == 0 {
 		return true
@@ -169,6 +212,18 @@ func (s *StreamWriter) Finalize(ctx context.Context, finalReply string) bool {
 	return true
 }
 
+// CleanupOnError deletes or replaces an in-flight status message when a turn fails,
+// so stale "⏳ Menjalankan..." drafts are never left hanging in chat.
+func (s *StreamWriter) CleanupOnError(ctx context.Context) {
+	s.Cancel()
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	if s.bot == nil || s.msgID == 0 || s.usedDraft {
+		return
+	}
+	_ = s.bot.DeleteMessage(ctx, s.chatID, s.msgID)
+}
+
 func (s *StreamWriter) renderLocked() string {
 	txt := strings.TrimSpace(s.buf.String())
 	note := strings.TrimSpace(s.toolNote)
@@ -177,14 +232,33 @@ func (s *StreamWriter) renderLocked() string {
 			note = fmt.Sprintf("%s (%s)", note, elapsed)
 		}
 	}
+	var statusLines []string
+	if s.iter > 0 && (note != "" || len(s.recentSteps) > 0) {
+		el := ""
+		if !s.startedAt.IsZero() {
+			el = " · " + time.Since(s.startedAt).Truncate(time.Second).String()
+		}
+		if s.maxIter > 0 {
+			statusLines = append(statusLines, fmt.Sprintf("🧭 Langkah %d/%d%s:", s.iter, s.maxIter, el))
+		} else {
+			statusLines = append(statusLines, fmt.Sprintf("🧭 Langkah %d%s:", s.iter, el))
+		}
+	}
+	for _, st := range s.recentSteps {
+		statusLines = append(statusLines, st)
+	}
+	if note != "" {
+		statusLines = append(statusLines, note)
+	}
+	statusBlock := strings.Join(statusLines, "\n")
 	var combined string
 	switch {
-	case txt != "" && note != "":
-		combined = txt + "\n\n" + note
+	case txt != "" && statusBlock != "":
+		combined = txt + "\n\n" + statusBlock
 	case txt != "":
 		combined = txt
-	case note != "":
-		combined = note
+	case statusBlock != "":
+		combined = statusBlock
 	default:
 		return ""
 	}
@@ -287,60 +361,4 @@ func (s *StreamWriter) ensureKeepalive() {
 			}
 		}
 	}()
-}
-
-// hasMeaningfulStreamText avoids flushing lone markdown prefixes like ">" or "**"
-// before actual alphanumeric content arrives.
-func hasMeaningfulStreamText(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return false
-	}
-	if len([]rune(trimmed)) >= 16 {
-		return true
-	}
-	for _, r := range trimmed {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return true
-		}
-	}
-	return false
-}
-
-func formatToolNote(name, args string) string {
-	detail := summarizeToolArg(name, args)
-	if detail != "" {
-		return fmt.Sprintf("⏳ Menjalankan `%s`: `%s`...", name, detail)
-	}
-	return fmt.Sprintf("⏳ Menjalankan `%s`...", name)
-}
-
-func summarizeToolArg(name, rawArgs string) string {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(rawArgs), &m); err != nil {
-		return ""
-	}
-	var val string
-	switch name {
-	case "terminal":
-		val, _ = m["cmd"].(string)
-	case "read_file", "write_file", "patch", "send_file":
-		val, _ = m["path"].(string)
-	case "web_fetch":
-		val, _ = m["url"].(string)
-	case "web_search":
-		val, _ = m["query"].(string)
-	case "delegate":
-		val, _ = m["task"].(string)
-	case "send_telegram":
-		if tid, ok := m["topic_id"].(float64); ok && tid > 0 {
-			val = fmt.Sprintf("topik %d", int64(tid))
-		}
-	}
-	val = strings.Join(strings.Fields(val), " ")
-	if val == "" {
-		return ""
-	}
-	val = strings.ReplaceAll(val, "`", "'")
-	return truncate(val, 60)
 }

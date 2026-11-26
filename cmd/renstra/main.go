@@ -20,7 +20,7 @@ import (
 	"renstra/internal/update"
 )
 
-var version = "v1.3.5"
+var version = "v1.4.0"
 
 func main() {
 	if rel, isNewer := update.PeekCachedUpdate(config.Home(), version); isNewer && rel != nil {
@@ -48,6 +48,11 @@ func main() {
 		}
 	case "restart":
 		if err := restartCmd(args[1:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+	case "service":
+		if err := serviceCmd(args[1:], os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
@@ -219,7 +224,9 @@ func chatCmd(args []string) error {
 		tool.NewSessionSearch(st),
 	}
 	if memStore != nil {
-		tools = append(tools, tool.NewMemory(memStore))
+		mt := tool.NewMemory(memStore)
+		mt.SetFactStore(st)
+		tools = append(tools, mt)
 	}
 	if skillReg != nil {
 		tools = append(tools, tool.NewSkill(skillReg))

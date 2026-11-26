@@ -1,4 +1,4 @@
-import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.3.5';
+import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.4.0';
 
 export async function loadOverview() {
   const [ov, turnsData] = await Promise.all([api('/api/overview'), api('/api/turns?limit=10')]);
@@ -51,6 +51,13 @@ export async function loadOverview() {
         const cls = t.status === 'error' ? 'badge-err' : t.status === 'done' ? 'badge-ok' : 'badge-warn';
         return `<tr><td class="mono">#${t.id}</td><td class="mono">${t.chat_id}</td><td><span class="badge ${cls}">${esc(t.status)}</span></td><td class="muted">${esc(t.started_at)}</td><td class="text-red">${esc(t.error || '-')}</td><td><button class="btn btn-sm btn-danger" data-del-turn="${t.id}">Delete</button></td></tr>`;
       }).join('');
+
+  const mUsage = ov.usage_by_model || [];
+  if ($('#ov-model-usage-body')) {
+    $('#ov-model-usage-body').innerHTML = !mUsage.length
+      ? '<tr><td colspan="6" class="muted">No model token usage recorded yet.</td></tr>'
+      : mUsage.map((m) => `<tr><td class="mono"><strong>${esc(m.model)}</strong></td><td class="mono">${m.requests}</td><td class="mono">${fmtTok(m.tokens_in)}</td><td class="mono">${fmtTok(m.tokens_out)}</td><td class="mono">${fmtTok((m.tokens_in || 0) + (m.tokens_out || 0))}</td><td class="mono">$${(m.cost_usd || 0).toFixed(4)}</td></tr>`).join('');
+  }
 }
 
 export async function loadLogs() {
@@ -100,13 +107,14 @@ export function renderLogs() {
     if (state.search && !JSON.stringify(e).toLowerCase().includes(state.search.toLowerCase())) return false;
     return true;
   });
-  if ($('#log-count')) $('#log-count').textContent = `${rows.length} entries`;
+  state.filteredLogs = rows;
+  if ($('#log-count')) $('#log-count').textContent = `${rows.length} ${rows.length === 1 ? 'entry' : 'entries'}`;
   box.innerHTML = !rows.length
     ? '<div class="muted" style="padding:14px;">No matching log entries.</div>'
-    : rows.map((e) => {
+    : rows.map((e, idx) => {
         const cls = e.level === 'ERROR' ? 'badge-err' : e.level === 'WARN' ? 'badge-warn' : 'badge-info';
         const attrs = formatLogChips(e.attrs);
-        return `<div class="log-row"><span class="muted log-time" title="${esc(e.time)}">${esc(shortTime(e.time))}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
+        return `<div class="log-row" data-log-idx="${idx}" style="cursor:pointer;" title="Click to inspect full log JSON"><span class="muted log-time" title="${esc(e.time)}">${esc(shortTime(e.time))}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
       }).join('');
 }
 
@@ -160,7 +168,11 @@ export function renderSkills() {
 }
 
 export async function loadMemory() {
-  const d = await api('/api/memory');
+  const q = $('#mem-fact-search')?.value || '';
+  const [d, fData] = await Promise.all([
+    api('/api/memory'),
+    api(`/api/memory/facts?q=${encodeURIComponent(q)}`).catch(() => ({ facts: [] }))
+  ]);
   $('#ed-soul').value = d.soul || '';
   $('#ed-memory').value = d.memory || '';
   $('#ed-user').value = d.user || '';
@@ -168,20 +180,34 @@ export async function loadMemory() {
   $('#mem-memory-count').textContent = `${d.memory_chars}/${d.memory_limit}`;
   $('#mem-user-count').textContent = `${d.user_chars}/${d.user_limit}`;
   if ($('#mem-limit-input')) $('#mem-limit-input').value = d.memory_limit || 2200;
+  const fBox = $('#memory-facts-list');
+  if (fBox) {
+    const facts = fData.facts || [];
+    fBox.innerHTML = !facts.length
+      ? '<div class="muted">Belum ada smart episodic fact tersimpan.</div>'
+      : facts.map((f) => `<div class="list-item"><div><div class="mono"><strong>#${f.id}</strong> <span class="badge badge-info">${esc(f.scope)}</span>${f.tags ? ` <span class="badge">${esc(f.tags)}</span>` : ''}</div><div style="white-space:pre-wrap;word-break:break-word;margin-top:4px;">${esc(f.content)}</div></div><button class="btn btn-sm btn-danger" data-del-fact="${f.id}">Delete</button></div>`).join('');
+  }
 }
 
 export async function loadAccounts() {
-  const d = await api('/api/accounts');
+  const [d, ov] = await Promise.all([api('/api/accounts'), api('/api/overview').catch(() => ({}))]);
+  state.accounts = d.accounts || [];
+  state.modelDetails = d.model_details || [];
+  if ($('#fb-list-input')) $('#fb-list-input').value = (ov.fallbacks_config || []).join(', ');
+  if ($('#fb-smart-chk')) $('#fb-smart-chk').checked = Boolean(ov.smart_fallback);
   const box = $('#accounts-list');
-  box.innerHTML = !(d.accounts || []).length
+  box.innerHTML = !state.accounts.length
     ? '<div class="muted">No provider accounts configured.</div>'
-    : d.accounts.map((a) => `
+    : state.accounts.map((a) => `
       <div class="list-item">
         <div>
           <div><strong class="mono">${esc(a.Name)}</strong> <span class="badge badge-info">${esc(a.Kind)}</span></div>
-          <div class="muted mono">model: ${esc(a.DefaultModel || '-')} • key: ${esc(a.MaskedKey)}</div>
+          <div class="muted mono">model: ${esc(a.DefaultModel || '-')} • key: ${esc(a.MaskedKey)}${a.BaseURL ? ' • ' + esc(a.BaseURL) : ''}</div>
         </div>
-        <button class="btn btn-sm btn-danger" data-del-account="${esc(a.Name)}">Delete</button>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm btn-ghost" data-edit-account="${esc(a.Name)}">Edit</button>
+          <button class="btn btn-sm btn-danger" data-del-account="${esc(a.Name)}">Delete</button>
+        </div>
       </div>`).join('');
   const pList = $('#provider-names-list');
   if (pList) {
@@ -217,6 +243,7 @@ export async function loadAccounts() {
             </div>
             <div style="display:flex;gap:6px;">
               ${m.ref !== d.default_model ? `<button class="btn btn-sm btn-ghost" data-use-model="${esc(m.ref)}">Use</button>` : ''}
+              <button class="btn btn-sm btn-ghost" data-edit-model="${esc(m.ref)}">Edit</button>
               <button class="btn btn-sm btn-danger" data-del-model="${esc(m.ref)}">Delete</button>
             </div>
           </div>`).join('')}
