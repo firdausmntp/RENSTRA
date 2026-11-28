@@ -1,13 +1,13 @@
 <!DOCTYPE html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RENSTRA Control Plane</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.4.5" />
-  <link rel="stylesheet" href="/styles/layout.css?v=1.4.5" />
-  <link rel="stylesheet" href="/styles/components.css?v=1.4.5" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.4.6" />
+  <link rel="stylesheet" href="/styles/layout.css?v=1.4.6" />
+  <link rel="stylesheet" href="/styles/components.css?v=1.4.6" />
 </head>
 <body>
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
@@ -15,10 +15,10 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
         <div class="brand">
-          <img src="/logo.svg" alt="RENSTRA" class="brand-logo" width="32" height="32" />
+          <img src="/logo.svg" alt="RENSTRA" class="brand-logo" width="30" height="30" />
           <div class="brand-meta">
             <div class="brand-title">RENSTRA</div>
-            <div class="brand-sub mono" id="sb-version">v1.3.0</div>
+            <div class="brand-sub mono" id="sb-version">v1.4.5</div>
           </div>
         </div>
         <button class="btn btn-sm btn-ghost drawer-close" id="btn-drawer-close" aria-label="Close navigation">
@@ -27,44 +27,44 @@
       </div>
 
       <nav class="nav" aria-label="Main navigation">
-        <button class="nav-btn active" data-tab="overview">
+        <button class="nav-btn active" data-tab="overview" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="3" rx="1"/><rect x="9" y="7" width="5" height="7" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/></svg>
             Overview
           </span>
         </button>
-        <button class="nav-btn" data-tab="logs">
+        <button class="nav-btn" data-tab="logs" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h8M2 12h10"/></svg>
             Live Logs
           </span>
           <span class="badge badge-err hidden" id="nav-err-badge">0</span>
         </button>
-        <button class="nav-btn" data-tab="skills">
+        <button class="nav-btn" data-tab="skills" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5.5 3.5L2 7l3.5 3.5M10.5 3.5L14 7l-3.5 3.5M8.5 2.5l-1 11"/></svg>
             Skills Studio
           </span>
         </button>
-        <button class="nav-btn" data-tab="memory">
+        <button class="nav-btn" data-tab="memory" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 2.5h7.5L13 5v8.5H3z"/><path d="M5.5 8h5M5.5 10.5h3.5"/></svg>
             Memory &amp; SOUL
           </span>
         </button>
-        <button class="nav-btn" data-tab="accounts">
+        <button class="nav-btn" data-tab="accounts" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5.5" cy="8" r="2.5"/><path d="M8 8h6M12 8v2M14 8v1.5"/></svg>
             Accounts &amp; Models
           </span>
         </button>
-        <button class="nav-btn" data-tab="cron">
+        <button class="nav-btn" data-tab="cron" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8.5" r="5.5"/><path d="M8 5.5v3l2 1.5M6 1.5h4"/></svg>
             Sessions &amp; Cron
           </span>
         </button>
-        <button class="nav-btn" data-tab="chat">
+        <button class="nav-btn" data-tab="chat" type="button">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 3.5h11v7.5H6l-3.5 2.5z"/></svg>
             Chat Playground
@@ -77,11 +77,11 @@
           <span class="dot"></span>
           <span id="sse-label">Connecting</span>
         </div>
-        <div class="uptime-text mono" id="sb-uptime">uptime -</div>
-        <div class="uptime-text mono" id="sb-ui-src">ui: embedded</div>
-        <div style="display:flex;gap:6px;margin-top:8px;">
-          <button class="btn btn-sm btn-ghost" id="btn-sync-ui" title="Sync UI from GitHub">Sync UI</button>
-          <button class="btn btn-sm btn-ghost" id="btn-theme" title="Toggle Light/Dark">Dark</button>
+        <div class="mono" id="sb-uptime">uptime —</div>
+        <div class="mono" id="sb-ui-src">ui: embedded</div>
+        <div class="sidebar-actions">
+          <button class="btn btn-sm btn-ghost" id="btn-sync-ui" type="button" title="Sync latest UI from GitHub">Sync UI</button>
+          <button class="btn btn-sm btn-ghost" id="btn-theme" type="button" title="Switch color theme">Dark</button>
         </div>
       </div>
     </aside>
@@ -89,74 +89,80 @@
     <main class="main">
       <header class="topbar">
         <div class="topbar-left">
-          <button class="btn btn-sm btn-ghost menu-btn" id="btn-menu" aria-label="Open navigation">
+          <button class="btn btn-sm btn-ghost menu-btn" id="btn-menu" type="button" aria-label="Open navigation">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg>
           </button>
           <h1 id="page-title">Overview</h1>
-          <span class="chip mono" id="top-model">model: -</span>
+          <span class="chip mono" id="top-model">model: —</span>
         </div>
         <div class="topbar-actions">
           <input type="file" id="inp-restore-file" accept=".tar.gz,.tgz,application/gzip" class="hidden" />
-          <button class="btn btn-ghost btn-ico" id="btn-restore" title="Restore Backup tar.gz">
-            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10.5v-8M5 5.5l3-3 3 3M3 13h10"/></svg>
-            <span class="btn-lbl">Restore</span>
-          </button>
-          <button class="btn btn-ghost btn-ico" id="btn-backup" title="Download tar.gz Backup (DB + Config + Memory + Skills)">
-            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2.5v8M5 7.5l3 3 3-3M3 13h10"/></svg>
-            <span class="btn-lbl">Backup</span>
-          </button>
-          <button class="btn btn-ghost btn-ico" id="btn-restart-svc" title="Restart Service &amp; Reload Config">
-            <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 2v4M4.8 4.2a5.5 5.5 0 1 0 6.4 0"/></svg>
-            <span class="btn-lbl">Restart</span>
-          </button>
-          <button class="btn btn-ghost btn-ico" id="btn-refresh" title="Refresh">
+          <button class="btn btn-ghost btn-ico" id="btn-refresh" type="button" aria-label="Refresh current view" title="Refresh">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 8a5.5 5.5 0 1 1-1.4-3.7M13.5 2.5v3h-3"/></svg>
             <span class="btn-lbl">Refresh</span>
           </button>
-          <button class="btn btn-ghost hidden" id="btn-logout">Logout</button>
+          <details class="sys-menu" id="sys-menu">
+            <summary class="btn btn-ghost btn-ico" aria-label="System actions">
+              <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="2.2"/><path d="M8 2v2M8 12v2M2 8h2M12 8h2M3.8 3.8l1.4 1.4M10.8 10.8l1.4 1.4M12.2 3.8l-1.4 1.4M5.2 10.8l-1.4 1.4"/></svg>
+              <span class="btn-lbl">System</span>
+            </summary>
+            <div class="sys-dropdown" role="menu">
+              <button class="sys-item" id="btn-backup" type="button" role="menuitem">Download Backup (.tar.gz)</button>
+              <button class="sys-item" id="btn-restore" type="button" role="menuitem">Restore Backup...</button>
+              <div class="sys-sep"></div>
+              <button class="sys-item is-danger" id="btn-restart-svc" type="button" role="menuitem">Restart Service</button>
+            </div>
+          </details>
+          <button class="btn btn-ghost hidden" id="btn-logout" type="button">Logout</button>
         </div>
       </header>
 
       <section class="tab-panel active" id="tab-overview">
         <div class="kpi-grid">
-          <div class="card kpi">
+          <div class="card">
             <div class="kpi-label">Active Model</div>
-            <div class="kpi-val mono" id="ov-model">-</div>
-            <div class="kpi-sub mono" id="ov-provider">-</div>
+            <div class="kpi-val mono" id="ov-model"><span class="skel"></span></div>
+            <div class="kpi-sub mono" id="ov-provider"><span class="skel"></span></div>
           </div>
-          <div class="card kpi">
-            <div class="kpi-label">Spend Today</div>
-            <div class="kpi-val mono" id="ov-cost-today">$0.0000</div>
-            <div class="kpi-sub mono" id="ov-tok-today">0 tok</div>
+          <div class="card">
+            <div class="kpi-label">Today's Usage</div>
+            <div class="kpi-val mono" id="ov-cost-today"><span class="skel"></span></div>
+            <div class="kpi-sub mono" id="ov-tok-today"><span class="skel"></span></div>
           </div>
-          <div class="card kpi">
-            <div class="kpi-label">30-Day Spend</div>
-            <div class="kpi-val mono" id="ov-cost-30d">$0.0000</div>
-            <div class="kpi-sub mono" id="ov-tok-30d">0 tok</div>
+          <div class="card">
+            <div class="kpi-label">30-Day Usage</div>
+            <div class="kpi-val mono" id="ov-cost-30d"><span class="skel"></span></div>
+            <div class="kpi-sub mono" id="ov-tok-30d"><span class="skel"></span></div>
           </div>
-          <div class="card kpi">
-            <div class="kpi-label">Log Diagnostics</div>
-            <div class="kpi-val mono"><span class="text-red" id="ov-errs">0</span> <span class="muted">/</span> <span class="text-amber" id="ov-warns">0</span></div>
-            <div class="kpi-sub mono" id="ov-skills">0 skills loaded</div>
+          <div class="card">
+            <div class="kpi-label">System Health</div>
+            <div class="kpi-val mono" id="ov-health"><span class="skel"></span></div>
+            <div class="kpi-sub mono" id="ov-skills"><span class="skel"></span></div>
           </div>
         </div>
 
         <div class="grid-2">
           <div class="card">
-            <div class="card-head"><h2>Token Throughput (14 Days)</h2></div>
+            <div class="card-head">
+              <h2>Token Throughput (14 Days)</h2>
+              <span class="chart-head-meta mono" id="daily-chart-peak"></span>
+            </div>
             <div class="chart-box" id="daily-chart"></div>
           </div>
           <div class="card">
             <div class="card-head">
               <h2>Fallback Circuit Breakers</h2>
-              <button class="btn btn-sm btn-ghost" id="btn-reset-fb">Reset Circuit</button>
+              <button class="btn btn-sm btn-ghost" id="btn-reset-fb" type="button">Reset Circuit</button>
             </div>
             <div id="ov-fallbacks" class="list-box"></div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h2>Token Consumption by Model (30 Days)</h2></div>
+          <div class="card-head">
+            <h2>Token Consumption by Model (30 Days)</h2>
+            <span class="muted">Per-model tracking recorded from v1.4+</span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead><tr><th>Model</th><th>Requests</th><th>Tokens In</th><th>Tokens Out</th><th>Total</th><th>Est. Cost</th></tr></thead>
@@ -169,7 +175,7 @@
           <div class="card-head"><h2>Recent Turns</h2></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>ID</th><th>Chat / Topic</th><th>Status</th><th>Started</th><th>Error</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Chat / Topic</th><th>Status</th><th>Started (Local)</th><th>Error</th><th class="col-actions">Actions</th></tr></thead>
               <tbody id="ov-turns-body"></tbody>
             </table>
           </div>
@@ -177,31 +183,39 @@
       </section>
 
       <section class="tab-panel" id="tab-logs">
-        <div class="card">
-          <div class="toolbar">
-            <div class="btn-group" id="log-level-tabs">
-              <button class="btn btn-sm active" data-level="ALL">ALL</button>
-              <button class="btn btn-sm" data-level="ERROR">ERROR</button>
-              <button class="btn btn-sm" data-level="WARN">WARN</button>
-              <button class="btn btn-sm" data-level="INFO">INFO</button>
-              <button class="btn btn-sm" data-level="DEBUG">DEBUG</button>
+        <div class="card card-full">
+          <div class="log-toolbar">
+            <div class="log-toolbar-row">
+              <div class="search-wrap">
+                <input type="text" id="log-search" class="input mono" aria-label="Filter logs" placeholder="Search event, model, tool, chat_id, or error..." />
+              </div>
+              <div class="log-toolbar-actions">
+                <span class="muted mono" id="log-count">0 entries</span>
+                <button class="btn btn-sm btn-ghost" id="btn-log-pause" type="button">Pause</button>
+                <button class="btn btn-sm btn-ghost" id="btn-log-download" type="button">Download</button>
+                <button class="btn btn-sm btn-danger" id="btn-log-clear" type="button">Clear</button>
+              </div>
             </div>
-            <div class="btn-group" id="log-preset-tabs">
-              <button class="btn btn-sm active" data-preset="">All Events</button>
-              <button class="btn btn-sm" data-preset="turn_">Turns</button>
-              <button class="btn btn-sm" data-preset="tool_executed">Tools</button>
-              <button class="btn btn-sm" data-preset="llm_step">LLM Steps</button>
-              <button class="btn btn-sm" data-preset="loop_guard">Guards</button>
-              <button class="btn btn-sm" data-preset="smart_fallback">Fallbacks</button>
-              <button class="btn btn-sm" data-preset="tool_approval">Approvals</button>
+            <div class="log-filter-row">
+              <div class="btn-group" id="log-level-tabs" role="group" aria-label="Filter by log level">
+                <button class="btn btn-sm active" data-level="ALL" type="button">ALL</button>
+                <button class="btn btn-sm" data-level="ERROR" type="button">ERROR</button>
+                <button class="btn btn-sm" data-level="WARN" type="button">WARN</button>
+                <button class="btn btn-sm" data-level="INFO" type="button">INFO</button>
+                <button class="btn btn-sm" data-level="DEBUG" type="button">DEBUG</button>
+              </div>
+              <div class="btn-group" id="log-preset-tabs" role="group" aria-label="Filter by event category">
+                <button class="btn btn-sm active" data-preset="" type="button">All Events</button>
+                <button class="btn btn-sm" data-preset="turn_" type="button">Turns</button>
+                <button class="btn btn-sm" data-preset="tool_executed" type="button">Tools</button>
+                <button class="btn btn-sm" data-preset="llm_step" type="button">LLM Steps</button>
+                <button class="btn btn-sm" data-preset="loop_guard" type="button">Guards</button>
+                <button class="btn btn-sm" data-preset="smart_fallback" type="button">Fallbacks</button>
+                <button class="btn btn-sm" data-preset="tool_approval" type="button">Approvals</button>
+              </div>
             </div>
-            <input type="text" id="log-search" class="input mono" placeholder="Filter message, chat_id, model, or error..." />
-            <span class="muted mono" id="log-count">0 entries</span>
-            <button class="btn btn-sm btn-ghost" id="btn-log-pause">Pause</button>
-            <button class="btn btn-sm btn-ghost" id="btn-log-download">Download</button>
-            <button class="btn btn-sm btn-danger" id="btn-log-clear">Clear</button>
           </div>
-          <div class="log-stream" id="log-list"></div>
+          <div class="log-stream" id="log-list" role="list"></div>
         </div>
       </section>
 
@@ -209,21 +223,21 @@
         <div class="card">
           <div class="toolbar">
             <div class="btn-group" id="skill-filter-tabs">
-              <button class="btn btn-sm active" data-sfilter="all">All</button>
-              <button class="btn btn-sm" data-sfilter="writable">Writable</button>
-              <button class="btn btn-sm" data-sfilter="readonly">Read-Only</button>
+              <button class="btn btn-sm active" data-sfilter="all" type="button">All</button>
+              <button class="btn btn-sm" data-sfilter="writable" type="button">Writable</button>
+              <button class="btn btn-sm" data-sfilter="readonly" type="button">Read-Only</button>
             </div>
-            <input type="text" id="skill-search" class="input" placeholder="Search skill name or description..." />
-            <button class="btn btn-sm btn-ghost" id="btn-skill-reload">Reload Disk</button>
-            <button class="btn btn-sm btn-primary" id="btn-skill-new">New Skill</button>
+            <input type="text" id="skill-search" class="input" style="flex:1 1 220px;" placeholder="Search skill name or description..." />
+            <button class="btn btn-sm btn-ghost" id="btn-skill-reload" type="button">Reload Disk</button>
+            <button class="btn btn-sm btn-primary" id="btn-skill-new" type="button">New Skill</button>
           </div>
           <div id="skills-conflicts" class="hidden"></div>
           <div class="skills-grid" id="skills-grid"></div>
           <div class="pager" id="skills-pager">
             <span class="muted mono" id="skills-page-info">Page 1 / 1</span>
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-sm btn-ghost" id="btn-sk-prev">Prev</button>
-              <button class="btn btn-sm btn-ghost" id="btn-sk-next">Next</button>
+              <button class="btn btn-sm btn-ghost" id="btn-sk-prev" type="button">Prev</button>
+              <button class="btn btn-sm btn-ghost" id="btn-sk-next" type="button">Next</button>
             </div>
           </div>
         </div>
@@ -239,7 +253,7 @@
               <label>Stdio Command (optional if using URL) <input class="input mono" name="command" placeholder="e.g. npx" /></label>
               <label>Command Args (space-separated) <input class="input mono" name="args" placeholder="e.g. -y @playwright/mcp@latest" /></label>
               <label>HTTP/SSE URL (optional) <input class="input mono" name="url" placeholder="e.g. http://127.0.0.1:8931/sse" /></label>
-              <button class="btn btn-sm btn-primary" type="submit">Save MCP Server</button>
+              <div class="card-actions"><button class="btn btn-sm btn-primary" type="submit">Save MCP Server</button></div>
             </form>
           </div>
         </div>
@@ -247,41 +261,47 @@
 
       <section class="tab-panel" id="tab-memory">
         <div class="card">
-          <div class="toolbar">
-            <span class="muted">Memory Quota (chars):</span>
-            <input type="number" id="mem-limit-input" class="input mono" style="max-width:120px" min="200" placeholder="2200" />
-            <button class="btn btn-sm btn-ghost" id="btn-save-limit">Update Limit</button>
-          </div>
-        </div>
-        <div class="grid-3">
-          <div class="card">
-            <div class="card-head"><h2>SOUL.md</h2><span class="mono muted" id="mem-soul-count">0/0</span></div>
-            <textarea id="ed-soul" class="editor" rows="14"></textarea>
-            <div class="card-actions">
-              <button class="btn btn-sm btn-ghost" id="btn-reset-soul">Reset Default</button>
-              <button class="btn btn-sm btn-primary" data-save-mem="soul">Save SOUL</button>
+          <div class="card-head">
+            <div class="btn-group" id="mem-file-tabs" role="tablist" aria-label="Memory files">
+              <button class="btn btn-sm active" data-mem-tab="soul" type="button" role="tab">SOUL.md</button>
+              <button class="btn btn-sm" data-mem-tab="memory" type="button" role="tab">MEMORY.md</button>
+              <button class="btn btn-sm" data-mem-tab="user" type="button" role="tab">USER.md</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span class="mono badge" id="mem-active-count">0 / 0</span>
+              <span id="mem-quota-inline" class="hidden" style="display:inline-flex;align-items:center;gap:6px;">
+                <label class="muted" for="mem-limit-input">Quota:</label>
+                <input type="number" id="mem-limit-input" class="input mono" style="width:96px;min-height:30px;padding:4px 8px;" min="200" placeholder="2200" />
+                <button class="btn btn-sm btn-ghost" id="btn-save-limit" type="button">Apply</button>
+              </span>
             </div>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>MEMORY.md</h2><span class="mono muted" id="mem-memory-count">0/0</span></div>
-            <textarea id="ed-memory" class="editor" rows="14"></textarea>
+          <div class="quota-bar"><div class="quota-fill" id="mem-quota-fill" style="width:0%"></div></div>
+          <div id="mem-pane-soul">
+            <textarea id="ed-soul" class="editor" rows="15" aria-label="SOUL.md content"></textarea>
             <div class="card-actions">
-              <button class="btn btn-sm btn-danger" data-clear-mem="memory">Clear</button>
-              <button class="btn btn-sm btn-primary" data-save-mem="memory">Save MEMORY</button>
+              <button class="btn btn-sm btn-warn" id="btn-reset-soul" type="button">Reset Default SOUL</button>
+              <button class="btn btn-sm btn-primary" data-save-mem="soul" type="button">Save SOUL.md</button>
             </div>
           </div>
-          <div class="card">
-            <div class="card-head"><h2>USER.md</h2><span class="mono muted" id="mem-user-count">0/0</span></div>
-            <textarea id="ed-user" class="editor" rows="14"></textarea>
+          <div id="mem-pane-memory" class="hidden">
+            <textarea id="ed-memory" class="editor" rows="15" aria-label="MEMORY.md content"></textarea>
             <div class="card-actions">
-              <button class="btn btn-sm btn-danger" data-clear-mem="user">Clear</button>
-              <button class="btn btn-sm btn-primary" data-save-mem="user">Save USER</button>
+              <button class="btn btn-sm btn-danger" data-clear-mem="memory" type="button">Clear MEMORY.md</button>
+              <button class="btn btn-sm btn-primary" data-save-mem="memory" type="button">Save MEMORY.md</button>
+            </div>
+          </div>
+          <div id="mem-pane-user" class="hidden">
+            <textarea id="ed-user" class="editor" rows="15" aria-label="USER.md content"></textarea>
+            <div class="card-actions">
+              <button class="btn btn-sm btn-danger" data-clear-mem="user" type="button">Clear USER.md</button>
+              <button class="btn btn-sm btn-primary" data-save-mem="user" type="button">Save USER.md</button>
             </div>
           </div>
         </div>
         <div class="card">
           <div class="card-head">
-            <h2>Smart Episodic Memory Facts (SQLite)</h2>
+            <h2>Smart Episodic Memory Facts</h2>
             <input type="text" id="mem-fact-search" class="input mono" placeholder="Search episodic facts..." style="max-width:260px;" />
           </div>
           <div id="memory-facts-list" class="list-box"></div>
@@ -290,62 +310,71 @@
 
       <section class="tab-panel" id="tab-accounts">
         <div class="grid-2">
-          <div class="card">
-            <div class="card-head"><h2>Provider Accounts</h2></div>
-            <div id="accounts-list" class="list-box"></div>
-            <hr class="sep" />
-            <div class="card-head"><h2>Configured Models &amp; Context</h2></div>
-            <div id="models-detail-list" class="list-box"></div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>Add or Update Account</h2></div>
-            <form id="form-account" class="form-stack">
-              <label>Account Name <input class="input mono" name="name" placeholder="e.g. openrouter2" required /></label>
-              <label>Provider Kind
-                <select class="input mono" name="kind">
-                  <option value="openrouter">openrouter</option>
-                  <option value="openai">openai</option>
-                  <option value="anthropic">anthropic</option>
-                  <option value="google">google</option>
-                  <option value="groq">groq</option>
-                  <option value="mistral">mistral</option>
-                  <option value="xai">xai</option>
-                  <option value="ollama">ollama</option>
-                </select>
-              </label>
-              <label>API Key (.env — kosongkan saat Edit bila tidak mengubah key) <input class="input mono" name="api_key" type="password" placeholder="sk-... (optional on edit)" /></label>
-              <label>Default Model <input class="input mono" name="default_model" placeholder="e.g. anthropic/claude-3.7-sonnet" /></label>
-              <label>Base URL (optional) <input class="input mono" name="base_url" placeholder="https://..." /></label>
-              <div class="card-actions" style="margin-top:4px;">
-                <button class="btn btn-ghost btn-sm" type="button" id="btn-acc-reset">Clear</button>
-                <button class="btn btn-primary" type="submit" id="btn-acc-submit">Save Account</button>
-              </div>
-            </form>
-            <hr class="sep" />
-            <div class="card-head"><h2>Default Active Model</h2></div>
-            <div class="toolbar">
-              <select id="sel-default-model" class="input mono"></select>
-              <button class="btn btn-sm btn-primary" id="btn-set-model">Apply</button>
-              <button class="btn btn-sm btn-danger" id="btn-del-model">Delete</button>
+          <div class="stack-col">
+            <div class="card">
+              <div class="card-head"><h2>Provider Accounts</h2></div>
+              <div id="accounts-list" class="list-box"></div>
             </div>
-            <form id="form-model-add" class="form-stack">
-              <div class="card-head"><h2>Register Model(s) to Provider</h2></div>
-              <label>Model ID(s) (bisa banyak, pisah koma) <input class="input mono" name="model" placeholder="e.g. v4, v6, claude-3-7-sonnet" required /></label>
-              <label>Provider <input class="input mono" name="provider" list="provider-names-list" placeholder="e.g. utama / anthropic" /></label>
-              <datalist id="provider-names-list"></datalist>
-              <label>Context Window <input class="input mono" name="context" placeholder="e.g. 128k / 200k / 1M" /></label>
-              <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" checked /> Support Vision (gambar)</label>
-              <button class="btn btn-sm btn-ghost" type="submit">Add Model(s)</button>
-            </form>
-            <hr class="sep" />
-            <form id="form-fallbacks" class="form-stack">
+            <div class="card">
+              <div class="card-head"><h2>Configured Models &amp; Context</h2></div>
+              <div id="models-detail-list" class="list-box"></div>
+            </div>
+          </div>
+          <div class="stack-col">
+            <div class="card">
+              <div class="card-head"><h2>Default Active Model</h2></div>
+              <div class="toolbar" style="margin-bottom:0;">
+                <select id="sel-default-model" class="input mono" style="flex:1 1 200px;" aria-label="Default active model"></select>
+                <button class="btn btn-primary" id="btn-set-model" type="button">Apply Default</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>Add or Update Account</h2></div>
+              <form id="form-account" class="form-stack">
+                <label>Account Name <input class="input mono" name="name" placeholder="e.g. openrouter2" required /></label>
+                <label>Provider Kind
+                  <select class="input mono" name="kind">
+                    <option value="custom">custom (OpenAI-compatible)</option>
+                    <option value="openrouter">openrouter</option>
+                    <option value="openai">openai</option>
+                    <option value="anthropic">anthropic</option>
+                    <option value="google">google</option>
+                    <option value="groq">groq</option>
+                    <option value="mistral">mistral</option>
+                    <option value="xai">xai</option>
+                    <option value="ollama">ollama</option>
+                  </select>
+                </label>
+                <label>API Key (leave blank when editing to keep current key) <input class="input mono" name="api_key" type="password" placeholder="sk-..." /></label>
+                <label>Default Model <input class="input mono" name="default_model" placeholder="e.g. anthropic/claude-3.7-sonnet" /></label>
+                <label>Base URL (optional) <input class="input mono" name="base_url" placeholder="https://..." /></label>
+                <div class="card-actions">
+                  <button class="btn btn-ghost btn-sm" type="button" id="btn-acc-reset">Clear</button>
+                  <button class="btn btn-primary" type="submit" id="btn-acc-submit">Save Account</button>
+                </div>
+              </form>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2>Register Models to Provider</h2></div>
+              <form id="form-model-add" class="form-stack">
+                <label>Model IDs (comma-separated for batch) <input class="input mono" name="model" placeholder="e.g. v4, claude-sonnet-4-6" required /></label>
+                <label>Provider <input class="input mono" name="provider" list="provider-names-list" placeholder="e.g. custom / anthropic" /></label>
+                <datalist id="provider-names-list"></datalist>
+                <label>Context Window <input class="input mono" name="context" placeholder="e.g. 128k / 200k / 1M" /></label>
+                <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" checked /> Supports Vision (images)</label>
+                <div class="card-actions"><button class="btn btn-primary btn-sm" type="submit">Add Models</button></div>
+              </form>
+            </div>
+            <div class="card">
               <div class="card-head"><h2>Fallback Chain &amp; Smart Routing</h2></div>
-              <label>Fallback Targets (pisah koma atau baris baru, urut prioritas)
-                <textarea class="editor mono" id="fb-list-input" name="fallbacks" rows="3" placeholder="openai:gpt-4o-mini, anthropic:claude-3-5-sonnet-latest"></textarea>
-              </label>
-              <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" id="fb-smart-chk" name="smart_fallback" /> Auto Smart Fallback (context + vision discovery)</label>
-              <button class="btn btn-sm btn-primary" type="submit">Save Fallbacks</button>
-            </form>
+              <form id="form-fallbacks" class="form-stack">
+                <label>Fallback Targets (comma or newline separated, ordered by priority)
+                  <textarea class="editor mono" id="fb-list-input" name="fallbacks" rows="3" placeholder="openai:gpt-4o-mini, anthropic:claude-3-5-sonnet-latest"></textarea>
+                </label>
+                <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" id="fb-smart-chk" name="smart_fallback" /> Auto Smart Fallback (context + vision discovery)</label>
+                <div class="card-actions"><button class="btn btn-primary btn-sm" type="submit">Save Fallbacks</button></div>
+              </form>
+            </div>
           </div>
         </div>
       </section>
@@ -355,33 +384,37 @@
           <div class="card-head"><h2>Active Chats &amp; Topics</h2></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Chat / Topic</th><th>Model</th><th>Msgs</th><th>Last Activity</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Chat / Topic</th><th>Model</th><th>Messages</th><th>Last Activity (Local)</th><th class="col-actions">Actions</th></tr></thead>
               <tbody id="sessions-body"></tbody>
             </table>
           </div>
         </div>
-        <details class="card" id="cron-section">
-          <summary class="card-head" style="cursor:pointer;list-style:none;">
-            <h2>Cron Schedules <span class="badge badge-info" id="cron-count-badge">0</span></h2>
+        <div class="card">
+          <div class="card-head" style="margin-bottom:0;">
+            <button class="btn btn-ghost btn-sm" id="btn-cron-toggle" type="button" aria-expanded="false" aria-controls="cron-panel-body">
+              <span id="cron-chevron">▸</span>
+              <span>Cron Schedules</span>
+              <span class="badge badge-info" id="cron-count-badge">0</span>
+            </button>
             <button class="btn btn-sm btn-primary" id="btn-cron-new" type="button">New Cron</button>
-          </summary>
-          <div class="table-wrap" style="margin-top:10px;">
+          </div>
+          <div id="cron-panel-body" class="table-wrap hidden" style="margin-top:12px;">
             <table>
-              <thead><tr><th>ID</th><th>Chat</th><th>Schedule</th><th>Prompt</th><th>Actions</th></tr></thead>
+              <thead><tr><th>ID</th><th>Status</th><th>Chat</th><th>Schedule</th><th>Prompt</th><th class="col-actions">Actions</th></tr></thead>
               <tbody id="cron-body"></tbody>
             </table>
           </div>
-        </details>
+        </div>
       </section>
 
       <section class="tab-panel" id="tab-chat">
-        <div class="card">
-          <div class="toolbar">
-            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Session
-              <input class="input mono" type="number" id="chat-pg-id" value="1" style="width:105px;" />
+        <div class="card card-full">
+          <div class="chat-toolbar">
+            <label class="chat-field mono">Session
+              <input class="input mono" type="number" id="chat-pg-id" value="1" style="width:96px;" />
             </label>
-            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Model
-              <select class="input mono" id="chat-pg-model" style="min-width:200px;max-width:300px;">
+            <label class="chat-field mono">Model
+              <select class="input mono" id="chat-pg-model" style="width:240px;">
                 <option value="">(Active Session Default)</option>
               </select>
             </label>
@@ -389,9 +422,9 @@
             <button class="btn btn-sm btn-danger" id="btn-chat-clear" type="button">Clear Session</button>
             <span class="muted mono" id="chat-pg-status" style="margin-left:auto;">Ready</span>
           </div>
-          <div id="chat-pg-messages" class="list-box" style="height:52vh;overflow-y:auto;padding:8px 0;"></div>
-          <form id="form-chat-pg" style="display:flex;gap:8px;margin-top:8px;">
-            <input class="input" id="chat-pg-input" placeholder="Ketik pesan atau /command untuk test agent langsung dari browser..." required style="flex:1;" />
+          <div id="chat-pg-messages" class="chat-messages"></div>
+          <form id="form-chat-pg" class="chat-form">
+            <input class="input" id="chat-pg-input" placeholder="Send a message or /command to test the agent..." required style="flex:1;" />
             <button class="btn btn-primary" id="btn-chat-send" type="submit">Send</button>
           </form>
         </div>
@@ -399,93 +432,107 @@
     </main>
   </div>
 
-  <div class="modal" id="skill-modal" aria-hidden="true">
+  <div class="modal" id="skill-modal" role="dialog" aria-modal="true" aria-labelledby="skill-modal-title" aria-hidden="true">
     <div class="modal-card">
-      <div class="card-head">
+      <div class="modal-head">
         <h2 id="skill-modal-title">Edit Skill</h2>
-        <button class="btn btn-sm btn-ghost" id="btn-skill-close">Close</button>
+        <button class="btn btn-sm btn-ghost" id="btn-skill-close" type="button">Close</button>
       </div>
-      <form id="form-skill" class="form-stack">
-        <input type="hidden" name="mode" value="create" />
-        <label>Skill Name <input class="input mono" name="name" id="sk-name" required /></label>
-        <label>Description <input class="input" name="description" id="sk-desc" required /></label>
-        <label>Instructions (Markdown) <textarea class="editor" name="body" id="sk-body" rows="11" required></textarea></label>
-        <div class="card-actions">
-          <button class="btn btn-ghost" type="button" id="btn-skill-cancel">Cancel</button>
-          <button class="btn btn-primary" type="submit">Save Skill</button>
-        </div>
-      </form>
+      <div class="modal-body">
+        <form id="form-skill" class="form-stack">
+          <input type="hidden" name="mode" value="create" />
+          <label>Skill Name <input class="input mono" name="name" id="sk-name" required /></label>
+          <label>Description <input class="input" name="description" id="sk-desc" required /></label>
+          <label>Instructions (Markdown) <textarea class="editor" name="body" id="sk-body" rows="12" required></textarea></label>
+          <div class="card-actions">
+            <button class="btn btn-ghost" type="button" id="btn-skill-cancel">Cancel</button>
+            <button class="btn btn-primary" type="submit">Save Skill</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
-  <div class="modal" id="cron-modal" aria-hidden="true">
+  <div class="modal" id="cron-modal" role="dialog" aria-modal="true" aria-labelledby="cron-modal-title" aria-hidden="true">
     <div class="modal-card">
-      <div class="card-head">
+      <div class="modal-head">
         <h2 id="cron-modal-title">New Cron Job</h2>
-        <button class="btn btn-sm btn-ghost" id="btn-cron-close">Close</button>
+        <button class="btn btn-sm btn-ghost" id="btn-cron-close" type="button">Close</button>
       </div>
-      <form id="form-cron" class="form-stack">
-        <input type="hidden" name="id" id="cr-id" value="0" />
-        <label>Chat / Topic ID <input class="input mono" type="number" name="chat_id" id="cr-chat" value="1" /></label>
-        <label>Schedule (5-field or @daily) <input class="input mono" name="schedule" id="cr-sched" placeholder="0 9 * * *" required /></label>
-        <label>Prompt <textarea class="editor" name="prompt" id="cr-prompt" rows="4" required></textarea></label>
-        <div class="card-actions">
-          <button class="btn btn-ghost" type="button" id="btn-cron-cancel">Cancel</button>
-          <button class="btn btn-primary" type="submit">Save Cron</button>
-        </div>
-      </form>
+      <div class="modal-body">
+        <form id="form-cron" class="form-stack">
+          <input type="hidden" name="id" id="cr-id" value="0" />
+          <label>Chat / Topic ID <input class="input mono" type="number" name="chat_id" id="cr-chat" value="1" /></label>
+          <label>Schedule (5-field or @daily) <input class="input mono" name="schedule" id="cr-sched" placeholder="0 9 * * *" required /></label>
+          <label>Prompt <textarea class="editor" name="prompt" id="cr-prompt" rows="4" required></textarea></label>
+          <div class="card-actions">
+            <button class="btn btn-ghost" type="button" id="btn-cron-cancel">Cancel</button>
+            <button class="btn btn-primary" type="submit">Save Cron</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
-  <div class="modal" id="transcript-modal" aria-hidden="true">
+  <div class="modal" id="transcript-modal" role="dialog" aria-modal="true" aria-labelledby="transcript-title" aria-hidden="true">
     <div class="modal-card">
-      <div class="card-head">
+      <div class="modal-head">
         <h2 id="transcript-title">Session Transcript</h2>
-        <button class="btn btn-sm btn-ghost" id="btn-transcript-close">Close</button>
+        <button class="btn btn-sm btn-ghost" id="btn-transcript-close" type="button">Close</button>
       </div>
-      <div id="transcript-body" class="list-box" style="max-height:65vh;overflow-y:auto;"></div>
+      <div class="modal-body">
+        <div id="transcript-body" class="list-box"></div>
+      </div>
     </div>
   </div>
 
-  <div class="modal" id="log-detail-modal" aria-hidden="true">
+  <div class="modal" id="log-detail-modal" role="dialog" aria-modal="true" aria-labelledby="log-detail-title" aria-hidden="true">
     <div class="modal-card">
-      <div class="card-head">
+      <div class="modal-head">
         <h2 id="log-detail-title">Log Details</h2>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-sm btn-ghost" id="btn-log-copy">Copy JSON</button>
-          <button class="btn btn-sm btn-ghost" id="btn-log-detail-close">Close</button>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div class="btn-group" id="log-modal-tabs">
+            <button class="btn btn-sm active" data-lmtab="summary" type="button">Summary</button>
+            <button class="btn btn-sm" data-lmtab="json" type="button">Raw JSON</button>
+          </div>
+          <button class="btn btn-sm btn-ghost" id="btn-log-copy" type="button">Copy JSON</button>
+          <button class="btn btn-sm btn-ghost" id="btn-log-detail-close" type="button">Close</button>
         </div>
       </div>
-      <div id="log-detail-summary" class="list-box" style="margin-bottom:10px;"></div>
-      <pre id="log-detail-body" class="editor mono" style="max-height:48vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+      <div class="modal-body">
+        <div id="log-detail-summary"></div>
+        <pre id="log-detail-body" class="editor mono hidden" style="margin:0;white-space:pre-wrap;word-break:break-word;min-height:220px;"></pre>
+      </div>
     </div>
   </div>
 
-  <div class="modal" id="model-edit-modal" aria-hidden="true">
+  <div class="modal" id="model-edit-modal" role="dialog" aria-modal="true" aria-labelledby="model-edit-title" aria-hidden="true">
     <div class="modal-card">
-      <div class="card-head">
+      <div class="modal-head">
         <h2 id="model-edit-title">Edit Model</h2>
-        <button class="btn btn-sm btn-ghost" id="btn-model-edit-close">Close</button>
+        <button class="btn btn-sm btn-ghost" id="btn-model-edit-close" type="button">Close</button>
       </div>
-      <form id="form-model-edit" class="form-stack">
-        <input type="hidden" name="old_ref" id="me-old-ref" />
-        <label>Provider <input class="input mono" name="provider" id="me-provider" list="provider-names-list" required /></label>
-        <label>Model ID <input class="input mono" name="model" id="me-model" required /></label>
-        <label>Context Window <input class="input mono" name="context" id="me-context" placeholder="e.g. 128000 / 200k / 1M" /></label>
-        <label>Max Output Tokens <input class="input mono" name="max_output" id="me-max-output" placeholder="e.g. 8192" /></label>
-        <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" id="me-vision" /> Support Vision (gambar)</label>
-        <div class="card-actions">
-          <button class="btn btn-ghost" type="button" id="btn-model-edit-cancel">Cancel</button>
-          <button class="btn btn-primary" type="submit">Save Model</button>
-        </div>
-      </form>
+      <div class="modal-body">
+        <form id="form-model-edit" class="form-stack">
+          <input type="hidden" name="old_ref" id="me-old-ref" />
+          <label>Provider <input class="input mono" name="provider" id="me-provider" list="provider-names-list" required /></label>
+          <label>Model ID <input class="input mono" name="model" id="me-model" required /></label>
+          <label>Context Window <input class="input mono" name="context" id="me-context" placeholder="e.g. 128000 / 200k / 1M" /></label>
+          <label>Max Output Tokens <input class="input mono" name="max_output" id="me-max-output" placeholder="e.g. 8192" /></label>
+          <label style="flex-direction:row;align-items:center;gap:8px;"><input type="checkbox" name="vision" id="me-vision" /> Supports Vision (images)</label>
+          <div class="card-actions">
+            <button class="btn btn-ghost" type="button" id="btn-model-edit-cancel">Cancel</button>
+            <button class="btn btn-primary" type="submit">Save Model</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 
-  <div class="auth-screen" id="auth-modal" aria-hidden="true">
+  <div class="auth-screen" id="auth-modal" role="dialog" aria-modal="true" aria-label="Dashboard authentication" aria-hidden="true">
     <div class="auth-card">
       <div class="auth-head">
-        <img src="/logo.svg" alt="RENSTRA" width="44" height="44" />
+        <img src="/logo.svg" alt="RENSTRA" width="40" height="40" />
         <div>
           <h2>RENSTRA Admin</h2>
           <p class="muted">Self-Hosted Gateway Control Plane</p>
@@ -503,6 +550,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/js/app.js?v=1.4.5"></script>
+  <script type="module" src="/js/app.js?v=1.4.6"></script>
 </body>
 </html>

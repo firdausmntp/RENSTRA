@@ -1,63 +1,96 @@
 :root {
   color-scheme: light;
-  --bg: #f8fafc;
+  --bg: #f6f8fb;
   --sidebar-bg: #ffffff;
   --surface: #ffffff;
   --surface-2: #f1f5f9;
+  --surface-3: #e8eef5;
   --log-bg: #ffffff;
-  --log-row-border: #f1f5f9;
+  --log-row-border: #eef2f6;
+  --log-row-hover: #f8fafc;
   --input-bg: #ffffff;
   --border: #e2e8f0;
   --border-strong: #cbd5e1;
   --text: #0f172a;
-  --muted: #475569;
-  --accent: #075985;
-  --focus-ring: 0 0 0 3px rgba(7, 89, 133, 0.16);
+  --text-2: #334155;
+  --muted: #52627a;
+  --accent: #0369a1;
+  --accent-bg: rgba(3, 105, 161, 0.09);
+  --accent-border: rgba(3, 105, 161, 0.24);
+  --focus-ring: 0 0 0 3px rgba(3, 105, 161, 0.20);
   --btn-prim-bg: #0f172a;
   --btn-prim-fg: #ffffff;
   --btn-prim-hover: #1e293b;
-  --green: #166534;
-  --amber: #92400e;
-  --red: #991b1b;
+  --green: #15803d;
+  --green-bg: rgba(21, 128, 61, 0.10);
+  --green-border: rgba(21, 128, 61, 0.24);
+  --amber: #b45309;
+  --amber-bg: rgba(180, 83, 9, 0.10);
+  --amber-border: rgba(180, 83, 9, 0.26);
+  --red: #b91c1c;
+  --red-bg: rgba(185, 28, 28, 0.09);
+  --red-border: rgba(185, 28, 28, 0.25);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
-  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-elev: 0 12px 32px -6px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-elev: 0 14px 36px -8px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.08);
+  --scroll-thumb: #cbd5e1;
+  --scroll-track: transparent;
 }
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b0c0e;
-  --sidebar-bg: #0e1014;
-  --surface: #121418;
-  --surface-2: #181b21;
-  --log-bg: #07080a;
-  --log-row-border: #171a20;
-  --input-bg: #090a0c;
-  --border: #252932;
-  --border-strong: #343a46;
-  --text: #e6e8ec;
+  --bg: #090b10;
+  --sidebar-bg: #0e121a;
+  --surface: #121722;
+  --surface-2: #192030;
+  --surface-3: #222b3e;
+  --log-bg: #0d1119;
+  --log-row-border: #1b2333;
+  --log-row-hover: #141b28;
+  --input-bg: #0c1018;
+  --border: #242e42;
+  --border-strong: #35425c;
+  --text: #f1f5f9;
+  --text-2: #cbd5e1;
   --muted: #94a3b8;
   --accent: #38bdf8;
-  --focus-ring: 0 0 0 3px rgba(56, 189, 248, 0.22);
-  --btn-prim-bg: #e6e8ec;
-  --btn-prim-fg: #0b0c0e;
+  --accent-bg: rgba(56, 189, 248, 0.14);
+  --accent-border: rgba(56, 189, 248, 0.34);
+  --focus-ring: 0 0 0 3px rgba(56, 189, 248, 0.28);
+  --btn-prim-bg: #f1f5f9;
+  --btn-prim-fg: #090b10;
   --btn-prim-hover: #ffffff;
   --green: #4ade80;
-  --amber: #facc15;
+  --green-bg: rgba(74, 222, 128, 0.12);
+  --green-border: rgba(74, 222, 128, 0.30);
+  --amber: #fbbf24;
+  --amber-bg: rgba(251, 191, 36, 0.13);
+  --amber-border: rgba(251, 191, 36, 0.32);
   --red: #f87171;
-  --shadow-card: none;
-  --shadow-elev: 0 8px 24px -4px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --red-bg: rgba(248, 113, 113, 0.13);
+  --red-border: rgba(248, 113, 113, 0.32);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-elev: 0 16px 40px -8px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --scroll-thumb: #334155;
+  --scroll-track: transparent;
 }
 
 * { box-sizing: border-box; }
+::selection { background: var(--accent-bg); color: var(--text); }
+* { scrollbar-width: thin; scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: var(--scroll-track); }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 999px; }
+
 body {
   margin: 0;
-  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--bg);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13.5px;
   line-height: 1.5;
+  caret-color: var(--accent);
   -webkit-font-smoothing: antialiased;
 }
 .mono {
@@ -68,3 +101,8 @@ body {
 .hidden { display: none !important; }
 .text-red { color: var(--red); }
 .text-amber { color: var(--amber); }
+.text-green { color: var(--green); }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}

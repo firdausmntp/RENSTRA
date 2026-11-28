@@ -1,12 +1,22 @@
-import { state, $, $$, api, toast, esc, updateErrBadge } from './api.js?v=1.4.5';
+import { state, $, $$, api, toast, esc, updateErrBadge } from './api.js?v=1.4.6';
 import {
-  loadOverview, loadLogs, renderLogs,
-  loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions, loadChatPlayground
-} from './views.js?v=1.4.5';
+  loadOverview, loadLogs, renderLogs, logMatchesFilter, renderLogRowHTML,
+  loadSkills, renderSkills, loadMemory, updateMemoryQuotaUI,
+  loadAccounts, loadCronAndSessions, setCronPanelOpen, loadChatPlayground
+} from './views.js?v=1.4.6';
 
 function openDrawer(open) {
   $('#sidebar').classList.toggle('open', open);
   $('#drawer-backdrop').classList.toggle('open', open);
+}
+
+function closeAllModals() {
+  $$('.modal.open').forEach((m) => {
+    m.classList.remove('open');
+    m.setAttribute('aria-hidden', 'true');
+  });
+  const sm = $('#sys-menu');
+  if (sm) sm.open = false;
 }
 
 $('#btn-menu')?.addEventListener('click', () => openDrawer(true));
@@ -16,7 +26,18 @@ window.addEventListener('resize', () => {
   if (window.innerWidth > 820) openDrawer(false);
 });
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') openDrawer(false);
+  if (e.key === 'Escape') {
+    openDrawer(false);
+    closeAllModals();
+  }
+});
+document.addEventListener('click', (e) => {
+  const sm = $('#sys-menu');
+  if (sm && sm.open && !sm.contains(e.target)) sm.open = false;
+  if (e.target.classList?.contains('modal') && e.target.classList.contains('open')) {
+    e.target.classList.remove('open');
+    e.target.setAttribute('aria-hidden', 'true');
+  }
 });
 
 const ROUTES = ['overview', 'logs', 'skills', 'memory', 'accounts', 'cron', 'chat'];
@@ -73,7 +94,19 @@ function connectSSE() {
       if (entry.level === 'ERROR') {
         updateErrBadge(parseInt($('#nav-err-badge').textContent || '0', 10) + 1);
       }
-      if (state.tab === 'logs') renderLogs();
+      if (state.tab === 'logs' && logMatchesFilter(entry)) {
+        state.filteredLogs.unshift(entry);
+        const box = $('#log-list');
+        if (box) {
+          if (state.filteredLogs.length === 1) box.innerHTML = '';
+          box.insertAdjacentHTML('afterbegin', renderLogRowHTML(entry, entry.id ?? `sse-${Date.now()}`));
+          while (box.children.length > 300) box.lastElementChild?.remove();
+        }
+        if ($('#log-count')) {
+          const n = state.filteredLogs.length;
+          $('#log-count').textContent = `${n} ${n === 1 ? 'entry' : 'entries'}`;
+        }
+      }
     } catch {}
   };
   es.onerror = () => {
@@ -110,45 +143,80 @@ function closeSkillModal() {
 }
 
 $('#log-level-tabs').addEventListener('click', (e) => {
-  if (!e.target.dataset.level) return;
+  const btn = e.target.closest('[data-level]');
+  if (!btn) return;
   $$('#log-level-tabs .btn').forEach((b) => b.classList.remove('active'));
-  e.target.classList.add('active');
-  state.level = e.target.dataset.level;
+  btn.classList.add('active');
+  state.level = btn.dataset.level;
   renderLogs();
 });
 $('#log-search').addEventListener('input', (e) => { state.search = e.target.value; renderLogs(); });
 $('#log-preset-tabs')?.addEventListener('click', (e) => {
-  if (e.target.dataset.preset === undefined) return;
+  const btn = e.target.closest('[data-preset]');
+  if (!btn) return;
   $$('#log-preset-tabs .btn').forEach((b) => b.classList.remove('active'));
-  e.target.classList.add('active');
-  $('#log-search').value = e.target.dataset.preset;
-  state.search = e.target.dataset.preset;
+  btn.classList.add('active');
+  $('#log-search').value = btn.dataset.preset;
+  state.search = btn.dataset.preset;
   renderLogs();
 });
-$('#log-list')?.addEventListener('click', (e) => {
-  const row = e.target.closest('.log-row');
-  if (!row || row.dataset.logIdx === undefined) return;
-  const entry = (state.filteredLogs || [])[Number(row.dataset.logIdx)];
+
+function openLogDetailModal(entry) {
   if (!entry) return;
   $('#log-detail-title').textContent = `${entry.level || 'INFO'}: ${entry.message || 'Log Entry'}`;
   const sumBox = $('#log-detail-summary');
   if (sumBox) {
     const attrs = entry.attrs || {};
     const pairs = [
-      ['Time', entry.time || '-'],
+      ['Time', entry.time || '—'],
       ['Level', entry.level || 'INFO'],
-      ['Event', entry.message || '-'],
+      ['Event', entry.message || '—'],
       ...Object.entries(attrs).filter(([, v]) => v !== '' && v !== null && v !== undefined)
     ];
-    sumBox.innerHTML = pairs.map(([k, v]) => {
+    sumBox.innerHTML = `<table class="kv-table"><tbody>${pairs.map(([k, v]) => {
       const val = typeof v === 'string' ? v : JSON.stringify(v);
       const isErr = k === 'error' || k === 'err';
-      return `<div class="list-item" style="padding:6px 10px;gap:12px;"><span class="mono muted" style="min-width:120px;">${esc(k)}</span><span class="mono ${isErr ? 'text-red' : ''}" style="word-break:break-word;white-space:pre-wrap;flex:1;">${esc(val)}</span></div>`;
-    }).join('');
+      return `<tr><td class="kv-key mono">${esc(k)}</td><td class="kv-val mono ${isErr ? 'text-red' : ''}">${esc(val)}</td></tr>`;
+    }).join('')}</tbody></table>`;
   }
   $('#log-detail-body').textContent = JSON.stringify(entry, null, 2);
+  setLogModalTab('summary');
   $('#log-detail-modal').classList.add('open');
   $('#log-detail-modal').setAttribute('aria-hidden', 'false');
+}
+
+function setLogModalTab(tab) {
+  $$('#log-modal-tabs .btn').forEach((b) => b.classList.toggle('active', b.dataset.lmtab === tab));
+  $('#log-detail-summary')?.classList.toggle('hidden', tab !== 'summary');
+  $('#log-detail-body')?.classList.toggle('hidden', tab !== 'json');
+}
+
+$('#log-modal-tabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-lmtab]');
+  if (btn) setLogModalTab(btn.dataset.lmtab);
+});
+
+function findLogByRow(row) {
+  const id = row?.dataset?.logId;
+  if (!id) return null;
+  const byId = state.filteredLogs.find((x) => String(x.id) === id);
+  if (byId) return byId;
+  if (id.startsWith('i-')) return state.filteredLogs[Number(id.slice(2))] || null;
+  return state.logs.find((x) => String(x.id) === id) || null;
+}
+
+$('#log-list')?.addEventListener('click', (e) => {
+  const row = e.target.closest('.log-row');
+  if (row) openLogDetailModal(findLogByRow(row));
+});
+$('#log-list')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    const row = e.target.closest('.log-row');
+    if (row) {
+      e.preventDefault();
+      openLogDetailModal(findLogByRow(row));
+    }
+  }
 });
 $('#btn-log-detail-close')?.addEventListener('click', () => {
   $('#log-detail-modal').classList.remove('open');
@@ -169,6 +237,7 @@ $('#btn-log-download').addEventListener('click', () => {
 $('#btn-log-clear').addEventListener('click', async () => {
   await api('/api/logs/clear', { method: 'POST' });
   state.logs = [];
+  state.filteredLogs = [];
   updateErrBadge(0);
   renderLogs();
   toast('Logs cleared');
@@ -191,16 +260,16 @@ $('#btn-sync-ui')?.addEventListener('click', async () => {
 });
 
 $('#skill-filter-tabs')?.addEventListener('click', (e) => {
-  if (!e.target.dataset.sfilter) return;
+  const btn = e.target.closest('[data-sfilter]');
+  if (!btn) return;
   $$('#skill-filter-tabs .btn').forEach((b) => b.classList.remove('active'));
-  e.target.classList.add('active');
-  state.skillFilter = e.target.dataset.sfilter;
+  btn.classList.add('active');
+  state.skillFilter = btn.dataset.sfilter;
   state.skillPage = 1;
   renderSkills();
 });
 $('#btn-sk-prev')?.addEventListener('click', () => { state.skillPage--; renderSkills(); });
 $('#btn-sk-next')?.addEventListener('click', () => { state.skillPage++; renderSkills(); });
-
 $('#skill-search').addEventListener('input', () => { state.skillPage = 1; renderSkills(); });
 $('#btn-skill-new').addEventListener('click', () => openSkillModal(''));
 $('#btn-skill-close').addEventListener('click', closeSkillModal);
@@ -221,7 +290,6 @@ $('#form-skill').addEventListener('submit', async (e) => {
   toast('Skill saved');
   await loadSkills();
 });
-
 $('#skills-grid').addEventListener('click', async (e) => {
   const editName = e.target.dataset.editSkill;
   if (editName) return openSkillModal(editName);
@@ -233,6 +301,14 @@ $('#skills-grid').addEventListener('click', async (e) => {
   }
 });
 
+$('#mem-file-tabs')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-mem-tab]');
+  if (!btn) return;
+  $$('#mem-file-tabs .btn').forEach((b) => b.classList.remove('active'));
+  btn.classList.add('active');
+  state.memTab = btn.dataset.memTab;
+  updateMemoryQuotaUI();
+});
 $$('[data-save-mem]').forEach((b) => b.addEventListener('click', async () => {
   const target = b.dataset.saveMem;
   await api('/api/memory', { method: 'POST', body: JSON.stringify({ target, text: $('#ed-' + target).value }) });
@@ -240,8 +316,9 @@ $$('[data-save-mem]').forEach((b) => b.addEventListener('click', async () => {
   await loadMemory();
 }));
 $('#btn-reset-soul').addEventListener('click', async () => {
+  if (!confirm('Reset SOUL.md to the default Zero Refusal template?')) return;
   await api('/api/memory', { method: 'POST', body: JSON.stringify({ target: 'reset_soul' }) });
-  toast('SOUL.md reset to Zero Refusal default');
+  toast('SOUL.md reset to default');
   await loadMemory();
 });
 $$('[data-clear-mem]').forEach((b) => b.addEventListener('click', async () => {
@@ -260,7 +337,7 @@ $('#btn-save-limit').addEventListener('click', async () => {
 $('#mem-fact-search')?.addEventListener('input', loadMemory);
 $('#memory-facts-list')?.addEventListener('click', async (e) => {
   const id = e.target.dataset.delFact;
-  if (!id || !confirm(`Delete smart memory fact #${id}?`)) return;
+  if (!id || !confirm(`Delete episodic memory fact #${id}?`)) return;
   await api('/api/memory/facts/delete', { method: 'POST', body: JSON.stringify({ id: Number(id) }) });
   toast(`Fact #${id} deleted`);
   await loadMemory();
@@ -281,7 +358,7 @@ $('#accounts-list').addEventListener('click', async (e) => {
     if (!acc) return;
     const f = $('#form-account');
     f.name.value = acc.Name;
-    f.kind.value = acc.Kind || 'openai';
+    f.kind.value = acc.Kind || 'custom';
     f.api_key.value = '';
     f.default_model.value = acc.DefaultModel || '';
     f.base_url.value = acc.BaseURL || '';
@@ -313,14 +390,7 @@ $('#form-account').addEventListener('submit', async (e) => {
 $('#btn-set-model').addEventListener('click', async () => {
   await api('/api/model/default', { method: 'POST', body: JSON.stringify({ ref: $('#sel-default-model').value }) });
   toast('Default model updated');
-  await loadOverview();
-});
-$('#btn-del-model').addEventListener('click', async () => {
-  const ref = $('#sel-default-model').value;
-  if (!ref || !confirm(`Delete model "${ref}"?`)) return;
-  await api('/api/models/delete', { method: 'POST', body: JSON.stringify({ ref }) });
-  toast('Model removed');
-  await loadAccounts();
+  await Promise.all([loadAccounts(), loadOverview()]);
 });
 $('#form-model-add').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -399,11 +469,8 @@ function closeCronModal() {
   $('#cron-modal').classList.remove('open');
   $('#cron-modal').setAttribute('aria-hidden', 'true');
 }
-$('#btn-cron-new').addEventListener('click', (e) => {
-  e.preventDefault();
-  e.stopPropagation();
-  openCronModal(null);
-});
+$('#btn-cron-toggle')?.addEventListener('click', () => setCronPanelOpen(!state.cronOpen));
+$('#btn-cron-new').addEventListener('click', () => openCronModal(null));
 $('#btn-cron-close').addEventListener('click', closeCronModal);
 $('#btn-cron-cancel').addEventListener('click', closeCronModal);
 $('#form-cron').addEventListener('submit', async (e) => {
@@ -422,7 +489,6 @@ $('#form-cron').addEventListener('submit', async (e) => {
   toast('Cron schedule saved');
   await loadCronAndSessions();
 });
-
 $('#cron-body').addEventListener('click', async (e) => {
   const editId = e.target.dataset.editCron;
   if (editId) {
@@ -446,7 +512,6 @@ $('#btn-transcript-close')?.addEventListener('click', () => {
   $('#transcript-modal').classList.remove('open');
   $('#transcript-modal').setAttribute('aria-hidden', 'true');
 });
-
 $('#sessions-body').addEventListener('click', async (e) => {
   const openChatId = e.target.dataset.openChat;
   if (openChatId) {
@@ -462,7 +527,7 @@ $('#sessions-body').addEventListener('click', async (e) => {
     $('#transcript-title').textContent = `Transcript: Chat ${viewId}`;
     $('#transcript-body').innerHTML = !msgs.length
       ? '<div class="muted">No messages in active session.</div>'
-      : msgs.map((m) => `<div class="list-item" style="flex-direction:column;align-items:stretch;"><div class="mono muted">${(m.Role || m.role || 'msg').toUpperCase()}</div><div style="white-space:pre-wrap;word-break:break-word;">${(m.Content || m.content || '(tool call)').replace(/</g, '&lt;')}</div></div>`).join('');
+      : msgs.map((m) => `<div class="list-item" style="flex-direction:column;align-items:stretch;"><div class="mono muted">${esc((m.Role || m.role || 'msg').toUpperCase())}</div><div style="white-space:pre-wrap;word-break:break-word;">${esc(m.Content || m.content || '(tool call)')}</div></div>`).join('');
     $('#transcript-modal').classList.add('open');
     $('#transcript-modal').setAttribute('aria-hidden', 'false');
     return;
@@ -480,13 +545,14 @@ $('#form-fallbacks')?.addEventListener('submit', async (e) => {
   const fallbacks = $('#fb-list-input').value;
   const smart_fallback = $('#fb-smart-chk').checked;
   await api('/api/fallback/save', { method: 'POST', body: JSON.stringify({ fallbacks, smart_fallback }) });
-  toast('Fallback chain saved & reloaded');
+  toast('Fallback chain saved');
   await Promise.all([loadAccounts(), loadOverview()]);
 });
 $('#btn-restart-svc')?.addEventListener('click', async () => {
-  if (!confirm('Restart RENSTRA service to load all latest config & notify Telegram?')) return;
+  $('#sys-menu').open = false;
+  if (!confirm('Restart RENSTRA service to load latest config and notify Telegram?')) return;
   await api('/api/service/restart', { method: 'POST' });
-  toast('Service restarting... Page will reload shortly');
+  toast('Service restarting... Reloading shortly');
   setTimeout(() => window.location.reload(), 3000);
 });
 $('#form-mcp-add')?.addEventListener('submit', async (e) => {
@@ -494,7 +560,7 @@ $('#form-mcp-add')?.addEventListener('submit', async (e) => {
   const payload = Object.fromEntries(new FormData(e.target).entries());
   await api('/api/mcp/save', { method: 'POST', body: JSON.stringify(payload) });
   e.target.reset();
-  toast('MCP server saved to mcp.yaml');
+  toast('MCP server saved');
   await loadSkills();
 });
 $('#mcp-list')?.addEventListener('click', async (e) => {
@@ -506,14 +572,18 @@ $('#mcp-list')?.addEventListener('click', async (e) => {
   }
 });
 $('#btn-backup')?.addEventListener('click', () => {
+  $('#sys-menu').open = false;
   const url = state.token ? `/api/backup?token=${encodeURIComponent(state.token)}` : '/api/backup';
   window.location.href = url;
 });
-$('#btn-restore')?.addEventListener('click', () => $('#inp-restore-file')?.click());
+$('#btn-restore')?.addEventListener('click', () => {
+  $('#sys-menu').open = false;
+  $('#inp-restore-file')?.click();
+});
 $('#inp-restore-file')?.addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
-  if (!confirm(`Restore backup from "${file.name}"?`)) {
+  if (!confirm(`Restore backup from "${file.name}"? This overwrites current data.`)) {
     e.target.value = '';
     return;
   }
@@ -588,12 +658,12 @@ $('#form-auth').addEventListener('submit', async (e) => {
 async function loadChromeMeta() {
   try {
     const ov = await api('/api/overview');
-    $('#sb-version').textContent = ov.version || 'v1.3.0-beta';
-    $('#sb-uptime').textContent = 'uptime ' + `${Math.floor((ov.uptime_sec||0)/3600)}h ${Math.floor(((ov.uptime_sec||0)%3600)/60)}m ${(ov.uptime_sec||0)%60}s`;
+    $('#sb-version').textContent = ov.version || 'v1.4.5';
+    $('#sb-uptime').textContent = 'uptime ' + `${Math.floor((ov.uptime_sec || 0) / 3600)}h ${Math.floor(((ov.uptime_sec || 0) % 3600) / 60)}m ${(ov.uptime_sec || 0) % 60}s`;
     if ($('#sb-ui-src')) {
       $('#sb-ui-src').textContent = `ui: ${ov.ui_source || 'embedded'}${ov.ui_version ? ' (' + ov.ui_version + ')' : ''}`;
     }
-    $('#top-model').textContent = 'model: ' + (ov.active_model || '-');
+    $('#top-model').textContent = 'model: ' + (ov.active_model || '—');
     $('#btn-logout')?.classList.toggle('hidden', !ov.auth_required);
     updateErrBadge(ov.error_count || 0);
   } catch {}
