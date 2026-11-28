@@ -9,7 +9,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +19,12 @@ import (
 
 // capOutput bounds how much a command may write before it is killed, so a
 // runaway `yes` cannot exhaust memory. Truncate() runs on top of this.
-const capOutput = 64 * 1024
+const (
+	capOutput        = 64 * 1024
+	maxBlockingSleep = 30 * time.Second
+)
+
+var sleepCmdRe = regexp.MustCompile(`(?i)(?:^|[;&|(\s])sleep\s+(\d+(?:\.\d+)?)([smhd])?(?:\s|$|[;&|)])`)
 
 // defaultEnvKeys are the only variables a child process inherits. Provider
 // keys and RENSTRA_* never reach it.
@@ -66,6 +73,9 @@ func (t *Terminal) Execute(ctx context.Context, args json.RawMessage) (string, e
 	}
 	if strings.TrimSpace(in.Cmd) == "" {
 		return "", errors.New("cmd kosong")
+	}
+	if dur, blocked := detectBlockingSleep(in.Cmd); blocked {
+		return fmt.Sprintf("[ditolak: perintah mengandung blocking sleep %s (> %s) yang menghabiskan waktu turn dan memicu timeout. Jangan polling dengan sleep di terminal; jalankan proses lama di background (`nohup ... > tmp/out.log 2>&1 &`) lalu laporkan PID/statusnya, atau gunakan tool `cron` untuk cek berkala.]", dur, maxBlockingSleep), nil
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
@@ -154,3 +164,42 @@ func (c *cappedBuffer) String() string {
 }
 
 var _ io.Writer = (*cappedBuffer)(nil)
+
+// detectBlockingSleep catches foreground `sleep <N>` calls exceeding maxBlockingSleep
+// (e.g. `sleep 180; pgrep ...`) that starve the turn timeout and bloat token loops.
+// Backgrounded commands (e.g. `nohup ... &` or `(...) &`) are allowed.
+func detectBlockingSleep(cmd string) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(cmd)
+	if strings.HasSuffix(trimmed, "&") && !strings.HasSuffix(trimmed, "&&") {
+		return 0, false
+	}
+	var maxFound time.Duration
+	for _, m := range sleepCmdRe.FindAllStringSubmatch(trimmed, -1) {
+		if len(m) < 2 {
+			continue
+		}
+		val, err := strconv.ParseFloat(m[1], 64)
+		if err != nil || val <= 0 {
+			continue
+		}
+		mult := time.Second
+		if len(m) >= 3 {
+			switch strings.ToLower(m[2]) {
+			case "m":
+				mult = time.Minute
+			case "h":
+				mult = time.Hour
+			case "d":
+				mult = 24 * time.Hour
+			}
+		}
+		d := time.Duration(val * float64(mult))
+		if d > maxFound {
+			maxFound = d
+		}
+	}
+	if maxFound > maxBlockingSleep {
+		return maxFound.Truncate(time.Second), true
+	}
+	return 0, false
+}

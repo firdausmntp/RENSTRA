@@ -37,6 +37,7 @@ func New(cfg config.ProviderConfig, apiKey string) (*Client, error) {
 	transport.MaxIdleConns = 32
 	transport.MaxIdleConnsPerHost = 16
 	transport.IdleConnTimeout = 90 * time.Second
+	transport.ResponseHeaderTimeout = timeout
 	if cfg.Proxy != "" {
 		u, err := url.Parse(cfg.Proxy)
 		if err != nil || u.Host == "" {
@@ -47,7 +48,7 @@ func New(cfg config.ProviderConfig, apiKey string) (*Client, error) {
 	return &Client{
 		cfg:    cfg,
 		apiKey: apiKey,
-		http:   &http.Client{Timeout: timeout, Transport: transport},
+		http:   &http.Client{Transport: transport},
 	}, nil
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +45,14 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 	}
 	if t.Danger() {
 		chatID := tool.ChatIDFrom(ctx)
+		argHint := summarizeArgForLog(call.Name, call.Arguments)
 		if decided, allowed := r.approvalCheck(call.Name, []byte(call.Arguments)); decided {
 			if r.Logger != nil {
-				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "config", "allowed", allowed)
+				if allowed {
+					r.Logger.Debug("tool_approval", "tool", call.Name, "arg", argHint, "chat_id", chatID, "source", "config", "allowed", true)
+				} else {
+					r.Logger.Warn("tool_approval", "tool", call.Name, "arg", argHint, "chat_id", chatID, "source", "config", "allowed", false)
+				}
 			}
 			if !allowed {
 				return "ditolak: aturan approval konfigurasi menolak perintah ini"
@@ -54,19 +60,19 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 		} else {
 			if isUnattended(ctx) {
 				if r.Logger != nil {
-					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "unattended", "allowed", false)
+					r.Logger.Warn("tool_approval", "tool", call.Name, "arg", argHint, "chat_id", chatID, "source", "unattended", "allowed", false)
 				}
 				return "ditolak: perintah berbahaya tidak diizinkan pada tugas otomatis (cron) tanpa pengawas"
 			}
 			if r.Approve == nil {
 				if r.Logger != nil {
-					r.Logger.Warn("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "no_approver", "allowed", false)
+					r.Logger.Warn("tool_approval", "tool", call.Name, "arg", argHint, "chat_id", chatID, "source", "no_approver", "allowed", false)
 				}
 				return "ditolak: perintah berbahaya butuh persetujuan (tidak ada approver)"
 			}
 			allowed, err := r.Approve(ctx, call.Name, json.RawMessage(call.Arguments))
 			if r.Logger != nil {
-				r.Logger.Info("tool_approval", "tool", call.Name, "chat_id", chatID, "source", "interactive", "allowed", allowed, "err", err)
+				r.Logger.Info("tool_approval", "tool", call.Name, "arg", argHint, "chat_id", chatID, "source", "interactive", "allowed", allowed, "err", err)
 			}
 			if err != nil {
 				return "approval gagal: " + err.Error()
@@ -77,18 +83,46 @@ func (r *Runner) executeTool(ctx context.Context, call provider.ToolCall) (res s
 		}
 	}
 
+	toolStart := time.Now()
 	out, err := t.Execute(ctx, json.RawMessage(call.Arguments))
+	toolDurMs := time.Since(toolStart).Milliseconds()
 	if err != nil {
+		if r.Logger != nil {
+			r.Logger.Warn("tool_executed",
+				"tool", call.Name,
+				"arg", summarizeArgForLog(call.Name, call.Arguments),
+				"chat_id", tool.ChatIDFrom(ctx),
+				"duration_ms", toolDurMs,
+				"ok", false,
+				"error", err.Error(),
+			)
+		}
 		return "error: " + err.Error()
 	}
 	if call.Name == "memory" || call.Name == "skill" {
 		r.invalidatePrompt()
 	}
 	truncated, terr := tool.Truncate(out, maxToolOutput, r.Cwd, call.ID)
+	finalOut := truncated
 	if terr != nil {
-		return out
+		finalOut = out
 	}
-	return truncated
+	if r.Logger != nil {
+		lvl := slog.LevelInfo
+		if strings.HasPrefix(finalOut, "[ditolak:") || strings.Contains(finalOut, "[timeout setelah") {
+			lvl = slog.LevelWarn
+		}
+		r.Logger.Log(ctx, lvl, "tool_executed",
+			"tool", call.Name,
+			"arg", summarizeArgForLog(call.Name, call.Arguments),
+			"chat_id", tool.ChatIDFrom(ctx),
+			"duration_ms", toolDurMs,
+			"ok", lvl == slog.LevelInfo,
+			"output_bytes", len(out),
+			"output_preview", previewForLog(finalOut, 180),
+		)
+	}
+	return finalOut
 }
 
 func (r *Runner) recordUsage(u *provider.Usage) {
@@ -141,7 +175,11 @@ func (r *Runner) appendWithFallback(ctx context.Context, chatID int64, m provide
 func (r *Runner) system() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.cachedPrompt == "" {
+	var memStamp int64
+	if r.Memory != nil {
+		memStamp = r.Memory.ModStamp()
+	}
+	if r.cachedPrompt == "" || (r.Memory != nil && memStamp != r.cachedMemStamp) {
 		params := BuildParams{
 			Cwd:          r.Cwd,
 			Model:        r.Model,
@@ -153,6 +191,7 @@ func (r *Runner) system() string {
 			params.Soul = snap.Soul
 			params.Memory = snap.Memory
 			params.UserProfile = snap.User
+			r.cachedMemStamp = memStamp
 		}
 		if r.Skills != nil {
 			params.SkillIndex = r.Skills.Index()
@@ -267,6 +306,31 @@ func extractImageAttachments(text string) []provider.Attachment {
 		out = append(out, provider.Attachment{Path: path, MimeType: mime})
 	}
 	return out
+}
+
+func previewForLog(s string, maxRunes int) string {
+	clean := strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	r := []rune(clean)
+	if len(r) <= maxRunes {
+		return clean
+	}
+	return string(r[:maxRunes]) + "..."
+}
+
+func summarizeArgForLog(name, rawArgs string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(rawArgs), &m); err == nil {
+		for _, k := range []string{"cmd", "path", "url", "query", "task"} {
+			if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+				s := strings.Join(strings.Fields(v), " ")
+				if len([]rune(s)) > 72 {
+					s = string([]rune(s)[:72]) + "..."
+				}
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func describeToolPhase(name, rawArgs string) string {

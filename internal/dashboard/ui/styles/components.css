@@ -41,9 +41,7 @@
 .input:focus, .editor:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
 .input::placeholder, .editor::placeholder { color: var(--muted); opacity: 1; }
 select.input {
-  appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 32px;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 16 16' fill='none' stroke='%2364748b' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 6l4 4 4-4'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 10px center; background-size: 14px;
+  cursor: pointer; padding-right: 26px;
 }
 select.input option { background: var(--surface); color: var(--text); }
 input[type="checkbox"] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; margin: 0; }

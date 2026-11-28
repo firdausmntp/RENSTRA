@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.2.7-blue.svg?style=flat-square&logo=github" alt="Version v1.2.7" /></a>
+  <a href="https://github.com/firdausmntp/RENSTRA/releases"><img src="https://img.shields.io/badge/version-v1.4.5-blue.svg?style=flat-square&logo=github" alt="Version v1.4.5" /></a>
   <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.23+" /></a>
   <img src="https://img.shields.io/badge/CGO-Disabled%20(Pure%20Go)-0EA5E9?style=flat-square" alt="Zero CGO" />
   <img src="https://img.shields.io/badge/Telegram%20Bot%20API-10.5%20Rich%20%26%20Topics-26A5E4?style=flat-square&logo=telegram&logoColor=white" alt="Telegram Bot API 10.5" />

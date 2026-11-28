@@ -169,6 +169,10 @@ func startDashboardServer(ctx context.Context, cfg *config.Config, flags serveFl
 		RestartService: func(reason string) error {
 			return triggerSelfRestart(home, 0, reason)
 		},
+		SwitchChatModel: func(mctx context.Context, chatID int64, ref string) error {
+			_, err := handler.handleModelCmd(mctx, chatID, ref)
+			return err
+		},
 		RunChat: func(rctx context.Context, chatID int64, prompt string) (string, error) {
 			return handler.Handle(agent.WithUnattended(rctx), chatID, prompt)
 		},

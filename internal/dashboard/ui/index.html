@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RENSTRA Control Plane</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-  <link rel="stylesheet" href="/styles/tokens.css?v=1.4.0" />
-  <link rel="stylesheet" href="/styles/layout.css?v=1.4.0" />
-  <link rel="stylesheet" href="/styles/components.css?v=1.4.0" />
+  <link rel="stylesheet" href="/styles/tokens.css?v=1.4.5" />
+  <link rel="stylesheet" href="/styles/layout.css?v=1.4.5" />
+  <link rel="stylesheet" href="/styles/components.css?v=1.4.5" />
 </head>
 <body>
   <div class="drawer-backdrop" id="drawer-backdrop"></div>
@@ -61,7 +61,7 @@
         <button class="nav-btn" data-tab="cron">
           <span class="nav-lbl">
             <svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8.5" r="5.5"/><path d="M8 5.5v3l2 1.5M6 1.5h4"/></svg>
-            Cron &amp; Sessions
+            Sessions &amp; Cron
           </span>
         </button>
         <button class="nav-btn" data-tab="chat">
@@ -184,10 +184,14 @@
               <button class="btn btn-sm" data-level="ERROR">ERROR</button>
               <button class="btn btn-sm" data-level="WARN">WARN</button>
               <button class="btn btn-sm" data-level="INFO">INFO</button>
+              <button class="btn btn-sm" data-level="DEBUG">DEBUG</button>
             </div>
             <div class="btn-group" id="log-preset-tabs">
               <button class="btn btn-sm active" data-preset="">All Events</button>
-              <button class="btn btn-sm" data-preset="turn_finished">Turns</button>
+              <button class="btn btn-sm" data-preset="turn_">Turns</button>
+              <button class="btn btn-sm" data-preset="tool_executed">Tools</button>
+              <button class="btn btn-sm" data-preset="llm_step">LLM Steps</button>
+              <button class="btn btn-sm" data-preset="loop_guard">Guards</button>
               <button class="btn btn-sm" data-preset="smart_fallback">Fallbacks</button>
               <button class="btn btn-sm" data-preset="tool_approval">Approvals</button>
             </div>
@@ -347,36 +351,39 @@
       </section>
 
       <section class="tab-panel" id="tab-cron">
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-head">
-              <h2>Cron Schedules</h2>
-              <button class="btn btn-sm btn-primary" id="btn-cron-new">New Cron</button>
-            </div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>ID</th><th>Chat</th><th>Schedule</th><th>Prompt</th><th>Actions</th></tr></thead>
-                <tbody id="cron-body"></tbody>
-              </table>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-head"><h2>Active Chats &amp; Topics</h2></div>
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Chat / Topic</th><th>Model</th><th>Msgs</th><th>Last Activity</th><th>Actions</th></tr></thead>
-                <tbody id="sessions-body"></tbody>
-              </table>
-            </div>
+        <div class="card">
+          <div class="card-head"><h2>Active Chats &amp; Topics</h2></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Chat / Topic</th><th>Model</th><th>Msgs</th><th>Last Activity</th><th>Actions</th></tr></thead>
+              <tbody id="sessions-body"></tbody>
+            </table>
           </div>
         </div>
+        <details class="card" id="cron-section">
+          <summary class="card-head" style="cursor:pointer;list-style:none;">
+            <h2>Cron Schedules <span class="badge badge-info" id="cron-count-badge">0</span></h2>
+            <button class="btn btn-sm btn-primary" id="btn-cron-new" type="button">New Cron</button>
+          </summary>
+          <div class="table-wrap" style="margin-top:10px;">
+            <table>
+              <thead><tr><th>ID</th><th>Chat</th><th>Schedule</th><th>Prompt</th><th>Actions</th></tr></thead>
+              <tbody id="cron-body"></tbody>
+            </table>
+          </div>
+        </details>
       </section>
 
       <section class="tab-panel" id="tab-chat">
         <div class="card">
           <div class="toolbar">
-            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Session ID
-              <input class="input mono" type="number" id="chat-pg-id" value="1" style="width:120px;" />
+            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Session
+              <input class="input mono" type="number" id="chat-pg-id" value="1" style="width:105px;" />
+            </label>
+            <label class="mono muted" style="display:flex;align-items:center;gap:6px;">Model
+              <select class="input mono" id="chat-pg-model" style="min-width:200px;max-width:300px;">
+                <option value="">(Active Session Default)</option>
+              </select>
             </label>
             <button class="btn btn-sm btn-ghost" id="btn-chat-load" type="button">Load History</button>
             <button class="btn btn-sm btn-danger" id="btn-chat-clear" type="button">Clear Session</button>
@@ -449,7 +456,8 @@
           <button class="btn btn-sm btn-ghost" id="btn-log-detail-close">Close</button>
         </div>
       </div>
-      <pre id="log-detail-body" class="editor mono" style="max-height:65vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></pre>
+      <div id="log-detail-summary" class="list-box" style="margin-bottom:10px;"></div>
+      <pre id="log-detail-body" class="editor mono" style="max-height:48vh;overflow:auto;white-space:pre-wrap;word-break:break-word;"></pre>
     </div>
   </div>
 
@@ -495,6 +503,6 @@
   </div>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="/js/app.js?v=1.4.0"></script>
+  <script type="module" src="/js/app.js?v=1.4.5"></script>
 </body>
 </html>

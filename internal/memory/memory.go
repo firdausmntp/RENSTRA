@@ -213,6 +213,21 @@ func (s *Store) Snapshot() Snapshot {
 	return Snapshot{Memory: string(mem), User: string(user), Soul: soul}
 }
 
+// ModStamp returns a lightweight fingerprint of MEMORY.md, USER.md, and SOUL.md
+// modification times and sizes so Runner can auto-refresh its cached prompt
+// whenever files are edited on disk (e.g. via Dashboard, CLI, or text editor).
+func (s *Store) ModStamp() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var stamp int64
+	for _, kind := range []Kind{KindMemory, KindUser, KindSoul} {
+		if info, err := os.Stat(s.paths[kind]); err == nil {
+			stamp = stamp*31 ^ info.ModTime().UnixNano() ^ (info.Size() << 7)
+		}
+	}
+	return stamp
+}
+
 // ResetSoul mengembalikan isi SOUL.md ke DefaultSoul bawaan.
 func (s *Store) ResetSoul() error {
 	return s.Write(KindSoul, DefaultSoul)

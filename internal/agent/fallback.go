@@ -86,13 +86,18 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 			MaxTokens: maxTok,
 		}
 
-		if i > 0 && r.Logger != nil {
-			r.Logger.Warn("smart_fallback",
-				"provider", target.Provider.Name(),
-				"model", target.Model,
-				"attempt", i+1,
-				"prev_error", lastErr,
-			)
+		if i > 0 {
+			if resetter, ok := any(sw).(interface{ ResetStepText() }); ok {
+				resetter.ResetStepText()
+			}
+			if r.Logger != nil {
+				r.Logger.Warn("smart_fallback",
+					"provider", target.Provider.Name(),
+					"model", target.Model,
+					"attempt", i+1,
+					"prev_error", lastErr,
+				)
+			}
 		}
 
 		var (
@@ -109,6 +114,9 @@ func (r *Runner) streamWithFallback(ctx context.Context, sysPrompt string, histo
 				return streamResult{text: text.String(), streamErr: ctx.Err()}, nil
 			}
 			if attempt > 0 {
+				if resetter, ok := any(sw).(interface{ ResetStepText() }); ok {
+					resetter.ResetStepText()
+				}
 				if r.Logger != nil {
 					r.Logger.Warn("retry_empty_response", "provider", target.Provider.Name(), "model", target.Model, "attempt", attempt+1)
 				}

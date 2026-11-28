@@ -27,6 +27,7 @@ func DefaultCommands() []BotCommand {
 		{Command: "export", Description: "Export riwayat percakapan ke Markdown"},
 		{Command: "logs", Description: "Unduh log error & diagnostik bot"},
 		{Command: "status", Description: "Info status sesi, model, konteks & biaya"},
+		{Command: "doctor", Description: "Diagnosa kesehatan config, timeout, memori & provider"},
 		{Command: "usage", Description: "Cek token & estimasi biaya hari ini"},
 		{Command: "insights", Description: "Ringkasan pemakaian harian, 7 & 30 hari"},
 		{Command: "compact", Description: "Kompaksi ringkasan riwayat sekarang"},

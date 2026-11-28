@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -253,4 +254,46 @@ func (r *Runner) primaryTarget() FallbackTarget {
 // lockChat serializes turns per chat.
 func (r *Runner) lockChat(chatID int64) func() {
 	return r.lockRegistry().acquire(chatID)
+}
+
+func lastN(items []string, n int) []string {
+	if len(items) <= n {
+		return items
+	}
+	return items[len(items)-n:]
+}
+
+// ForceCompact forces a history summarization and compaction for the given chatID.
+func (r *Runner) ForceCompact(ctx context.Context, chatID int64) (string, error) {
+	unlock := r.lockChat(chatID)
+	defer unlock()
+
+	history, err := r.Store.Messages(ctx, chatID)
+	if err != nil {
+		return "", err
+	}
+	if len(history) <= keepTurns {
+		return "pesan belum cukup banyak untuk dikompaksi", nil
+	}
+	summary := r.summarize(ctx, history)
+	if _, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err != nil {
+		return "", err
+	}
+	return summary, nil
+}
+
+func (r *Runner) threshold() float64 {
+	if r.Threshold <= 0 {
+		return compactThreshold
+	}
+	return r.Threshold
+}
+
+func autoScaleContextWindow(inputTokens int) int {
+	for _, tier := range []int{64000, 128000, 200000, 400000, 1000000, 2000000} {
+		if inputTokens < tier {
+			return tier
+		}
+	}
+	return inputTokens * 2
 }

@@ -4,6 +4,23 @@ Daftar perbaikan, audit keamanan, dan pengembangan fitur antar versi.
 
 ---
 
+## Rilis v1.4.5 (Anti-Timeout In-Turn Context Pruning, Loop & Repetition Guard, Rule Anchoring & `/doctor`)
+
+- [x] **Perbaikan Akar Penyebab Timeout & Ledakan Token Turn Panjang (`context_prune.go`, `terminal.go`, `anthropic`/`google`)**
+  - **Lokasi:** [`internal/agent/context_prune.go`](internal/agent/context_prune.go), [`internal/agent/runner.go`](internal/agent/runner.go), [`internal/tool/terminal.go`](internal/tool/terminal.go), [`internal/provider/anthropic/client.go`](internal/provider/anthropic/client.go), [`internal/provider/google/client.go`](internal/provider/google/client.go), [`cmd/renstra/setup.go`](cmd/renstra/setup.go), [`cmd/renstra/telegram_config.go`](cmd/renstra/telegram_config.go)
+  - **Perbaikan:** Mencegah loop `summarize()` tak berguna saat `CanCompact` tidak punya titik potong `RoleUser`, menambahkan *in-turn observation masking* + *safe block folding* (`PrepareRequestHistory`) agar token input tetap ramping di turn 20–80 langkah tanpa memutus pasangan `tool_calls`/`tool`, memblokir polling `sleep > 30s` di `terminal` dengan panduan background/`cron`, memindahkan HTTP timeout Anthropic & Google ke `ResponseHeaderTimeout`, serta memperbarui default setup & tombol `/config` (`80`/`120` iter, `30m`/`60m`).
+- [x] **Anti-Pesan Berulang & Streaming Telegram Bersih (`loop_guard.go`, `stream.go`, `fallback.go`, `tool.go`, `execute.go`)**
+  - **Lokasi:** [`internal/agent/loop_guard.go`](internal/agent/loop_guard.go), [`internal/telegram/stream.go`](internal/telegram/stream.go), [`internal/telegram/stream_helpers.go`](internal/telegram/stream_helpers.go), [`internal/agent/fallback.go`](internal/agent/fallback.go), [`internal/tool/tool.go`](internal/tool/tool.go), [`internal/tool/send_telegram.go`](internal/tool/send_telegram.go), [`internal/agent/execute.go`](internal/agent/execute.go)
+  - **Perbaikan:** Deteksi loop 4 lapis (pengulangan eksak 3x, siklus bolak-balik `A↔B`, output tool stagnan identik, dan narasi asisten berulang + hard-stop otomatis), reset buffer stream (`ResetStepText`) saat retry/fallback & pergantian iterasi agar teks tidak menumpuk/ganda, proteksi blok status `🧭 Langkah` & `⏳ Menjalankan` agar tidak terpotong batas 4096 char, supresi balasan akhir duplikat bila sudah terkirim identik via `send_telegram` (`IsDuplicateDelivery`), serta menaikkan kualitas log `tool_approval` (auto-allow config ke `DEBUG` + ringkasan argumen).
+- [x] **Rule Anchoring, Auto-Sync Memori Disk & Penguatan Prompt (`rule_guard.go`, `memory.go`, `prompt.go`, `compress.go`)**
+  - **Lokasi:** [`internal/agent/rule_guard.go`](internal/agent/rule_guard.go), [`internal/memory/memory.go`](internal/memory/memory.go), [`internal/agent/prompt.go`](internal/agent/prompt.go), [`internal/agent/compress.go`](internal/agent/compress.go)
+  - **Perbaikan:** Injeksi otomatis `[PENGINGAT ATURAN AKTIF]` (persona, larangan `"jangan ..."`, aturan `USER.md`/`MEMORY.md`/`SOUL.md`) setelah kompaksi, setiap 6 iterasi turn panjang, dan setelah hasil tool `[untrusted]`; deteksi perubahan disk otomatis via `ModStamp()` saat `SOUL.md`/`MEMORY.md`/`USER.md` diedit di luar tool; peningkatan auto-recall Smart Memory (5 fakta); serta preservasi aturan/larangan user saat kompaksi.
+- [x] **Diagnosa Kesehatan Mandiri `/doctor` & `renstra doctor` + Telemetri Detail Log (`telemetry.go`, Dashboard Live Logs & Playground)**
+  - **Lokasi:** [`cmd/renstra/doctor.go`](cmd/renstra/doctor.go), [`internal/agent/telemetry.go`](internal/agent/telemetry.go), [`internal/agent/execute.go`](internal/agent/execute.go), [`internal/dashboard/api_manage.go`](internal/dashboard/api_manage.go), [`internal/dashboard/api_chat.go`](internal/dashboard/api_chat.go), [`internal/dashboard/ui/`](internal/dashboard/ui/index.html)
+  - **Fitur:** Audit cepat 1 klik untuk timeout/iterasi lama di `config.yaml`, kesiapan API key & fallback, kuota memori, SQLite, keamanan Dashboard, dan log error/warn; event log terstruktur lengkap (`turn_started`, `llm_step`, `tool_executed` dengan argumen/durasi/output preview, `turn_finished` ber-cost & context%), filter level `DEBUG`, preset `Tools`/`LLM Steps`/`Guards`, ringkasan key-value pada modal Log Details, sinkronisasi penuh model & alias di Web Dashboard (`/api/accounts`), dropdown pilihan model di Chat Playground (`/chat`), serta tata letak baru **Sessions & Cron** (Sessions di atas + panel Cron collapsible).
+
+---
+
 ## Rilis v1.4.0 (Long-Horizon Reliability, Smart Episodic Memory, Enhanced Dashboard Analytics & Clean Service Restart Notification)
 
 - [x] **Long-Horizon Engine & Fix Timeout/Status Error Setelah Pengiriman Laporan**

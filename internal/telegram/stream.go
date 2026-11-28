@@ -102,19 +102,28 @@ func (s *StreamWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// SetStep records the current agent iteration and ensures clean paragraph breaks
-// between multi-step thinking blocks.
+// ResetStepText clears the current step's streamed text buffer (used before a
+// provider retry/fallback so partial output from a failed attempt is never duplicated).
+func (s *StreamWriter) ResetStepText() {
+	s.mu.Lock()
+	s.buf.Reset()
+	s.mu.Unlock()
+}
+
+// SetStep records the current agent iteration and resets the live step buffer
+// on subsequent iterations so old intermediate narration does not pile up into
+// a repetitive wall of text.
 func (s *StreamWriter) SetStep(iter, maxIter int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.startedAt.IsZero() {
 		s.startedAt = time.Now()
 	}
+	if iter > 1 && s.iter > 0 && iter != s.iter {
+		s.buf.Reset()
+	}
 	s.iter = iter
 	s.maxIter = maxIter
-	if s.buf.Len() > 0 && !strings.HasSuffix(s.buf.String(), "\n") {
-		s.buf.WriteString("\n\n")
-	}
 }
 
 // OnTool updates the streaming message with the name and brief target of the running tool.
@@ -225,7 +234,7 @@ func (s *StreamWriter) CleanupOnError(ctx context.Context) {
 }
 
 func (s *StreamWriter) renderLocked() string {
-	txt := strings.TrimSpace(s.buf.String())
+	txt := dedupeConsecutiveLines(strings.TrimSpace(s.buf.String()))
 	note := strings.TrimSpace(s.toolNote)
 	if note != "" && !s.toolStartedAt.IsZero() {
 		if elapsed := time.Since(s.toolStartedAt).Truncate(time.Second); elapsed >= 5*time.Second {
@@ -251,25 +260,37 @@ func (s *StreamWriter) renderLocked() string {
 		statusLines = append(statusLines, note)
 	}
 	statusBlock := strings.Join(statusLines, "\n")
-	var combined string
-	switch {
-	case txt != "" && statusBlock != "":
-		combined = txt + "\n\n" + statusBlock
-	case txt != "":
-		combined = txt
-	case statusBlock != "":
-		combined = statusBlock
-	default:
-		return ""
-	}
+
 	limit := MaxRichMessageLength
 	if s.draftFailed {
 		limit = MaxMessageLength
 	}
-	if len([]rune(combined)) > limit {
-		return truncate(combined, limit-2)
+	switch {
+	case txt != "" && statusBlock != "":
+		// Always preserve the live status block at the bottom by trimming txt first.
+		statusRunes := len([]rune(statusBlock))
+		budget := limit - statusRunes - 6
+		if budget <= 40 {
+			return truncate(statusBlock, limit-2)
+		}
+		if len([]rune(txt)) > budget {
+			r := []rune(txt)
+			txt = "…\n" + strings.TrimSpace(string(r[len(r)-(budget-2):]))
+		}
+		return txt + "\n\n" + statusBlock
+	case txt != "":
+		if len([]rune(txt)) > limit {
+			return truncate(txt, limit-2)
+		}
+		return txt
+	case statusBlock != "":
+		if len([]rune(statusBlock)) > limit {
+			return truncate(statusBlock, limit-2)
+		}
+		return statusBlock
+	default:
+		return ""
 	}
-	return combined
 }
 
 func (s *StreamWriter) flush(text string) {

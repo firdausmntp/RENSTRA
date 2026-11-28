@@ -184,9 +184,15 @@ $env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="arm64"; go build -o renstr
 
 ---
 
-## 7. Status Rilis & Pengembangan (v1.4.0)
+## 7. Status Rilis & Pengembangan (v1.4.5)
 
-Fitur & pembaruan v1.4.0:
+Fitur & pembaruan v1.4.5:
+1. **Anti-Timeout & In-Turn Context Pruning (`internal/agent/context_prune.go`, `internal/tool/terminal.go`, `anthropic`/`google`):** Guard `CanCompact` mencegah panggilan `summarize()` berulang tanpa cut point, observation masking + safe block folding menjaga token turn panjang tetap hemat tanpa memutus pasangan `tool_calls`/`tool`, guard blocking `sleep > 30s` di `terminal`, pemindahan HTTP timeout Anthropic/Google ke `ResponseHeaderTimeout`, serta default `80` iter / `30m` di `setup.go` & menu `/config` (`60m` / `120` iter).
+2. **Loop & Repetition Guard + Streaming Bersih (`internal/agent/loop_guard.go`, `internal/telegram/stream.go`, `internal/tool/tool.go`, `internal/agent/execute.go`):** Deteksi pengulangan eksak, siklus `A↔B`, output tool stagnan, dan narasi asisten berulang + hard-stop; `ResetStepText()` mencegah duplikasi teks saat retry/step baru; supresi balasan akhir duplikat pasca-`send_telegram` (`IsDuplicateDelivery`); blok status `🧭 Langkah`/`⏳` tidak lagi terpotong di 4096 char; serta log `tool_approval` config-allow diturunkan ke `DEBUG` dengan ringkasan argumen.
+3. **Rule Anchoring & Disk Auto-Sync (`internal/agent/rule_guard.go`, `internal/memory/memory.go`, `internal/agent/prompt.go`, `internal/agent/compress.go`):** Injeksi ulang `[PENGINGAT ATURAN AKTIF]` setelah kompaksi, tiap 6 iterasi, dan pasca-output `[untrusted]`; auto-refresh prompt cache via `ModStamp()` saat file memori diedit di disk; serta preservasi aturan/larangan user saat kompaksi.
+4. **Diagnosa Kesehatan `/doctor` & `renstra doctor`, Telemetri Detail Log & Dashboard Upgrades (`cmd/renstra/doctor.go`, `internal/agent/telemetry.go`, `internal/dashboard/`):** Pengecekan instan timeout/config lama, kesiapan provider/fallback, kuota memori, SQLite, keamanan dashboard, dan log error/warn; event terstruktur `turn_started`, `llm_step`, `tool_executed`, dan `turn_finished`; filter `DEBUG` + preset `Tools`/`LLM Steps`/`Guards` + modal Log Details key-value; resolusi penuh alias model di `/api/accounts`; dropdown model di Chat Playground (`/chat`); serta prioritas **Sessions & Cron** dengan panel Cron collapsible.
+
+Fitur v1.4.0 sebelumnya:
 1. **Long-Horizon & Bugfix Turn Timeout Pasca-Pengiriman (`internal/agent/runner.go`, `internal/telegram/stream.go`):** Default `80` iterasi / `30m`, soft wrap-up nudge, tracking `send_telegram` delivery (`WasChatDelivered`) agar tidak mengirim error/log palsu saat timeout pasca-laporan, indikator `🧭 Langkah X/Y` + breadcrumb tool, dan `CleanupOnError` agar draft `⏳` tidak menggantung.
 2. **Smart AI Agent Memory (`internal/store/memory_facts.go`, `internal/tool/agent_tools.go`):** Fakta episodik persisten tanpa batas 2200 char dengan ranking BM25 + trigram (`remember`/`recall`/`append`/`delete`) serta auto-recall otomatis di awal setiap turn.
 3. **Dashboard Analytics, Detailed Logs & Fallback Manager (`internal/store/usage_models.go`, `internal/dashboard/`):** Modal detail JSON log + preset filter, tabel konsumsi token & biaya per model (`usage_by_model`), editor Fallback Chain + Smart Routing, viewer Smart Memory Facts, dan tombol Restart Service.

@@ -40,19 +40,32 @@ type deliveryKey struct{}
 type deliveryTracker struct {
 	mu    sync.Mutex
 	chats map[int64]bool
+	texts map[int64][]string
 }
 
 // WithDeliveryTracker attaches a per-turn map tracking which chatIDs already
 // received a direct message via tools like send_telegram.
 func WithDeliveryTracker(ctx context.Context) context.Context {
-	return context.WithValue(ctx, deliveryKey{}, &deliveryTracker{chats: map[int64]bool{}})
+	return context.WithValue(ctx, deliveryKey{}, &deliveryTracker{
+		chats: map[int64]bool{},
+		texts: map[int64][]string{},
+	})
 }
 
 // MarkChatDelivered records that chatID received a tool-delivered message in this turn.
 func MarkChatDelivered(ctx context.Context, chatID int64) {
+	MarkChatDeliveredText(ctx, chatID, "")
+}
+
+// MarkChatDeliveredText records that chatID received a direct message along with
+// its text so the runner can suppress duplicate final replies with identical content.
+func MarkChatDeliveredText(ctx context.Context, chatID int64, text string) {
 	if dt, ok := ctx.Value(deliveryKey{}).(*deliveryTracker); ok && dt != nil && chatID != 0 {
 		dt.mu.Lock()
 		dt.chats[chatID] = true
+		if norm := normalizeDeliveredText(text); norm != "" {
+			dt.texts[chatID] = append(dt.texts[chatID], norm)
+		}
 		dt.mu.Unlock()
 	}
 }
@@ -65,6 +78,75 @@ func WasChatDelivered(ctx context.Context, chatID int64) bool {
 		return dt.chats[chatID]
 	}
 	return false
+}
+
+// IsDuplicateDelivery reports whether candidate text substantially duplicates a
+// message already sent to chatID via a direct delivery tool in the same turn.
+func IsDuplicateDelivery(ctx context.Context, chatID int64, candidate string) bool {
+	if chatID == 0 {
+		return false
+	}
+	cand := normalizeDeliveredText(candidate)
+	if cand == "" {
+		return false
+	}
+	dt, ok := ctx.Value(deliveryKey{}).(*deliveryTracker)
+	if !ok || dt == nil {
+		return false
+	}
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	for _, sent := range dt.texts[chatID] {
+		if sent == cand {
+			return true
+		}
+		if len(cand) >= 40 && len(sent) >= 40 {
+			if strings.Contains(sent, cand) || strings.Contains(cand, sent) {
+				shorter, longer := len(cand), len(sent)
+				if shorter > longer {
+					shorter, longer = longer, shorter
+				}
+				if float64(shorter)/float64(longer) >= 0.72 {
+					return true
+				}
+			}
+			if wordOverlapRatio(sent, cand) >= 0.80 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeDeliveredText(s string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(s)), " "))
+}
+
+func wordOverlapRatio(a, b string) float64 {
+	wa := strings.Fields(a)
+	wb := strings.Fields(b)
+	if len(wa) == 0 || len(wb) == 0 {
+		return 0
+	}
+	setA := make(map[string]struct{}, len(wa))
+	for _, w := range wa {
+		setA[w] = struct{}{}
+	}
+	setB := make(map[string]struct{}, len(wb))
+	for _, w := range wb {
+		setB[w] = struct{}{}
+	}
+	inter := 0
+	for w := range setA {
+		if _, ok := setB[w]; ok {
+			inter++
+		}
+	}
+	union := len(setA) + len(setB) - inter
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
 }
 
 type Registry struct {

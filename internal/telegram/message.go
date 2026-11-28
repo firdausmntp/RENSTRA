@@ -102,6 +102,7 @@ const HelpText = "📖 **RENSTRA — Panduan Lengkap**\n\n" +
 	"• `/context [ukuran]` — lihat atau ubah ukuran context window (`32k`, `128k`, `200k`, `1m`)\n" +
 	"• `/group [always|mention|topic]` — kontrol mode respons grup & filter topik forum\n" +
 	"• `/status` — ringkasan status sesi, model, konteks & biaya\n" +
+	"• `/doctor` — diagnosa kesehatan config, timeout, memori, fallback & log\n" +
 	"• `/export` — export transkrip sesi aktif menjadi file `.md`\n" +
 	"• `/logs` — unduh file log error & diagnostik terbaru (`/logs clear` untuk hapus)\n" +
 	"• `/compact` — ringkas riwayat sekarang supaya konteks lega\n\n" +

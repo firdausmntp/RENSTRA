@@ -275,6 +275,9 @@ func (h *telegramHandler) Handle(ctx context.Context, chatID int64, text string)
 	case "/service":
 		return h.handleServiceCmd(ctx, chatID, arg)
 
+	case "/doctor":
+		return h.handleDoctorCmd(ctx, chatID)
+
 	case "/dashboard":
 		if h.dashAddr == "" {
 			return "📊 Web Dashboard tidak aktif. Jalankan `renstra serve --dashboard-port 8080` untuk mengaktifkannya.", nil

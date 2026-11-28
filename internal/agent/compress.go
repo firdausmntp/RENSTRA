@@ -92,7 +92,7 @@ func CompactHistory(msgs []provider.Message, keep int, summary string) []provide
 func buildSummaryPrompt(msgs []provider.Message) string {
 	var b strings.Builder
 	b.WriteString("ringkas percakapan berikut dalam bahasa Indonesia, maksimal 400 kata. ")
-	b.WriteString("pertahankan: keputusan, nama file/path penting, perintah yang sudah dijalankan, dan hal yang belum selesai.\n\n")
+	b.WriteString("WAJIB pertahankan: aturan/larangan eksplisit dari user (\"jangan ...\", format wajib, pantangan), keputusan, nama file/path penting, perintah yang sudah dijalankan, dan hal yang belum selesai.\n\n")
 	for _, m := range msgs {
 		if m.Role == provider.RoleSystem {
 			continue

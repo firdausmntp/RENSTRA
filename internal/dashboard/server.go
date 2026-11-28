@@ -57,6 +57,7 @@ type Options struct {
 	ReloadConfig       func(cfg *config.Config)
 	ReloadMCP          func()
 	RestartService     func(reason string) error
+	SwitchChatModel    func(ctx context.Context, chatID int64, ref string) error
 	RunChat            func(ctx context.Context, chatID int64, prompt string) (string, error)
 }
 

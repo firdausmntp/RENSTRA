@@ -62,3 +62,25 @@ func summarizeToolArg(name, rawArgs string) string {
 	val = strings.ReplaceAll(val, "`", "'")
 	return truncate(val, 60)
 }
+
+// dedupeConsecutiveLines collapses back-to-back identical non-empty lines so
+// repetitive model status output stays readable during streaming.
+func dedupeConsecutiveLines(s string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	lastNonEmpty := ""
+	for _, line := range lines {
+		norm := strings.TrimSpace(line)
+		if norm != "" && norm == lastNonEmpty {
+			continue
+		}
+		if norm != "" {
+			lastNonEmpty = norm
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}

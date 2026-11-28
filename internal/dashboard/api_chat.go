@@ -24,6 +24,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ChatID int64  `json:"chat_id"`
 		Prompt string `json:"prompt"`
+		Model  string `json:"model"`
 	}
 	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Prompt) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt wajib diisi"})
@@ -36,7 +37,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chat runner belum aktif di mode ini"})
 		return
 	}
-	reply, err := s.opts.RunChat(r.Context(), req.ChatID, strings.TrimSpace(req.Prompt))
+	prompt := strings.TrimSpace(req.Prompt)
+	modelRef := strings.TrimSpace(req.Model)
+	if modelRef != "" && !strings.HasPrefix(strings.ToLower(prompt), "/model") && s.opts.SwitchChatModel != nil {
+		if err := s.opts.SwitchChatModel(r.Context(), req.ChatID, modelRef); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "gagal ganti model: " + err.Error()})
+			return
+		}
+	}
+	reply, err := s.opts.RunChat(r.Context(), req.ChatID, prompt)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -44,6 +53,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
 		"chat_id": req.ChatID,
+		"model":   modelRef,
 		"reply":   reply,
 	})
 }

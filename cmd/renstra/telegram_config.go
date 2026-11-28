@@ -142,11 +142,11 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 	}
 	mi := cr.MaxIters
 	if mi <= 0 {
-		mi = 40
+		mi = 80
 	}
 	to := cr.TurnTimeout
 	if to <= 0 {
-		to = 15 * time.Minute
+		to = 30 * time.Minute
 	}
 	promptStatus := "(default)"
 	if strings.TrimSpace(cr.PromptPrefix) != "" {
@@ -187,15 +187,15 @@ func (h *telegramHandler) buildConfigMenu(ctx context.Context, chatID int64, pag
 			pickBtn("Thresh 85%", fmt.Sprintf("%.2f", th) == "0.85", "cfg:th:0.85:0"),
 		})
 		rows = append(rows, []telegram.InlineButton{
-			pickBtn("Iter 20", mi == 20, "cfg:mi:20:0"),
 			pickBtn("Iter 40", mi == 40, "cfg:mi:40:0"),
 			pickBtn("Iter 80", mi == 80, "cfg:mi:80:0"),
+			pickBtn("Iter 120", mi == 120, "cfg:mi:120:0"),
 		})
 	} else {
 		rows = append(rows, []telegram.InlineButton{
-			pickBtn("Timeout 5m", to == 5*time.Minute, "cfg:to:300:1"),
 			pickBtn("Timeout 15m", to == 15*time.Minute, "cfg:to:900:1"),
 			pickBtn("Timeout 30m", to == 30*time.Minute, "cfg:to:1800:1"),
+			pickBtn("Timeout 60m", to == 60*time.Minute, "cfg:to:3600:1"),
 		})
 		rows = append(rows, []telegram.InlineButton{
 			pickBtn("Warn $1", cr.Limits.WarnDailyUSD == 1, "cfg:wu:1:1"),

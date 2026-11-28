@@ -66,11 +66,11 @@ func (t *SendTelegram) Execute(ctx context.Context, raw json.RawMessage) (string
 			return "", err
 		}
 		msgID = id
-		MarkChatDelivered(ctx, targetChat)
+		MarkChatDeliveredText(ctx, targetChat, in.Text)
 	} else if err := t.sender.SendToTopic(ctx, targetChat, in.TopicID, in.Text); err != nil {
 		return "", err
 	} else {
-		MarkChatDelivered(ctx, targetChat)
+		MarkChatDeliveredText(ctx, targetChat, in.Text)
 	}
 	if in.TopicID > 0 {
 		if msgID > 0 {

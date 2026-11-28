@@ -1,4 +1,4 @@
-import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.4.0';
+import { state, $, api, fmtTok, fmtDur, esc, updateErrBadge } from './api.js?v=1.4.5';
 
 export async function loadOverview() {
   const [ov, turnsData] = await Promise.all([api('/api/overview'), api('/api/turns?limit=10')]);
@@ -77,15 +77,34 @@ function shortTime(iso) {
 function formatLogChips(attrs) {
   if (!attrs) return '';
   const chips = [];
-  const skip = new Set(['tokens_in', 'tokens_out']);
+  const skip = new Set(['tokens_in', 'tokens_out', 'context_used', 'context_window']);
   if (attrs.tokens_in !== undefined || attrs.tokens_out !== undefined) {
     chips.push(`<span class="attr-chip">${fmtTok(attrs.tokens_in || 0)} in · ${fmtTok(attrs.tokens_out || 0)} out</span>`);
+  }
+  if (attrs.context_used && attrs.context_window) {
+    const pct = Math.round((Number(attrs.context_used) / Math.max(1, Number(attrs.context_window))) * 100);
+    chips.push(`<span class="attr-chip">ctx ${fmtTok(attrs.context_used)}/${fmtTok(attrs.context_window)} (${pct}%)</span>`);
   }
   for (const [k, v] of Object.entries(attrs)) {
     if (skip.has(k) || v === '' || v === null || v === undefined) continue;
     if (k === 'duration_ms') {
-      const sec = (Number(v) / 1000).toFixed(1);
-      chips.push(`<span class="attr-chip">${sec}s</span>`);
+      const ms = Number(v);
+      const label = ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
+      chips.push(`<span class="attr-chip">${label}</span>`);
+      continue;
+    }
+    if (k === 'output_bytes') {
+      const bytes = Number(v);
+      const label = bytes >= 1024 ? `${(bytes / 1024).toFixed(1)}KB` : `${bytes}B`;
+      chips.push(`<span class="attr-chip">${label}</span>`);
+      continue;
+    }
+    if (k === 'cost_usd') {
+      chips.push(`<span class="attr-chip">$${esc(String(v))}</span>`);
+      continue;
+    }
+    if (k === 'ok') {
+      chips.push(`<span class="badge ${v ? 'badge-ok' : 'badge-err'}">${v ? 'ok' : 'fail'}</span>`);
       continue;
     }
     if (k === 'status') {
@@ -93,7 +112,8 @@ function formatLogChips(attrs) {
       chips.push(`<span class="badge ${cls}">${esc(v)}</span>`);
       continue;
     }
-    const val = typeof v === 'string' ? v : JSON.stringify(v);
+    let val = typeof v === 'string' ? v : JSON.stringify(v);
+    if (val.length > 72) val = val.slice(0, 72) + '…';
     const isErr = k === 'error' || k === 'err';
     chips.push(`<span class="attr-chip ${isErr ? 'is-err' : ''}">${esc(k)}: ${esc(val)}</span>`);
   }
@@ -112,9 +132,9 @@ export function renderLogs() {
   box.innerHTML = !rows.length
     ? '<div class="muted" style="padding:14px;">No matching log entries.</div>'
     : rows.map((e, idx) => {
-        const cls = e.level === 'ERROR' ? 'badge-err' : e.level === 'WARN' ? 'badge-warn' : 'badge-info';
+        const cls = e.level === 'ERROR' ? 'badge-err' : e.level === 'WARN' ? 'badge-warn' : e.level === 'DEBUG' ? 'badge' : 'badge-info';
         const attrs = formatLogChips(e.attrs);
-        return `<div class="log-row" data-log-idx="${idx}" style="cursor:pointer;" title="Click to inspect full log JSON"><span class="muted log-time" title="${esc(e.time)}">${esc(shortTime(e.time))}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
+        return `<div class="log-row" data-log-idx="${idx}" style="cursor:pointer;" title="Click to inspect full log details"><span class="muted log-time" title="${esc(e.time)}">${esc(shortTime(e.time))}</span><span class="badge ${cls}">${esc(e.level)}</span><span class="log-msg">${esc(e.message)}</span>${attrs}</div>`;
       }).join('');
 }
 
@@ -214,8 +234,8 @@ export async function loadAccounts() {
     pList.innerHTML = (d.accounts || []).map((a) => `<option value="${esc(a.Name)}">${esc(a.Kind)}</option>`).join('');
   }
   const sel = $('#sel-default-model');
-  const models = d.models || [];
-  sel.innerHTML = models.map((m) => `<option value="${esc(m)}" ${m === d.default_model ? 'selected' : ''}>${esc(m)}</option>`).join('');
+  const opts = d.model_options || (d.models || []).map((m) => ({ ref: m, label: m }));
+  sel.innerHTML = opts.map((o) => `<option value="${esc(o.ref)}" ${o.ref === d.default_model ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
   const detailsBox = $('#models-detail-list');
   if (detailsBox) {
     const details = d.model_details || [];
@@ -235,18 +255,22 @@ export async function loadAccounts() {
           <strong class="mono">${esc(prov)}</strong>
           <span class="badge badge-info">${items.length} model${items.length > 1 ? 's' : ''}</span>
         </div>
-        ${items.map((m) => `
+        ${items.map((m) => {
+          const isActive = m.ref === d.default_model || (m.alias && m.alias === d.default_model);
+          const useTarget = m.alias || m.ref;
+          return `
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px solid var(--border);">
             <div>
-              <div class="mono"><strong>${esc(m.model)}</strong>${m.ref === d.default_model ? ' <span class="badge badge-ok">active</span>' : ''}</div>
+              <div class="mono"><strong>${esc(m.model)}</strong>${m.alias ? ` <span class="badge badge-info">alias: ${esc(m.alias)}</span>` : ''}${isActive ? ' <span class="badge badge-ok">active</span>' : ''}</div>
               <div class="muted mono">ctx ${fmtTok(m.context)} · max_out ${fmtTok(m.max_output || 4096)}${m.vision ? ' · vision' : ''}</div>
             </div>
             <div style="display:flex;gap:6px;">
-              ${m.ref !== d.default_model ? `<button class="btn btn-sm btn-ghost" data-use-model="${esc(m.ref)}">Use</button>` : ''}
+              ${!isActive ? `<button class="btn btn-sm btn-ghost" data-use-model="${esc(useTarget)}">Use</button>` : ''}
               <button class="btn btn-sm btn-ghost" data-edit-model="${esc(m.ref)}">Edit</button>
-              <button class="btn btn-sm btn-danger" data-del-model="${esc(m.ref)}">Delete</button>
+              <button class="btn btn-sm btn-danger" data-del-model="${esc(useTarget)}">Delete</button>
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </div>`).join('');
   }
 }
@@ -255,20 +279,35 @@ export async function loadCronAndSessions() {
   const [c, s] = await Promise.all([api('/api/cron'), api('/api/sessions')]);
   const jobs = c.jobs || [];
   state.jobs = jobs;
+  if ($('#cron-count-badge')) $('#cron-count-badge').textContent = String(jobs.length);
+  if ($('#cron-section')) $('#cron-section').open = jobs.length > 0;
   $('#cron-body').innerHTML = !jobs.length
     ? '<tr><td colspan="5" class="muted">No cron schedules.</td></tr>'
     : jobs.map((j) => `<tr><td class="mono">#${j.ID}</td><td class="mono">${j.ChatID}</td><td class="mono">${esc(j.Schedule)}</td><td>${esc(j.Prompt)}</td><td><button class="btn btn-sm btn-ghost" data-edit-cron="${j.ID}">Edit</button> <button class="btn btn-sm btn-ghost" data-toggle-cron="${j.ID}" data-cron-next="${!j.Enabled}">${j.Enabled ? 'Disable' : 'Enable'}</button> <button class="btn btn-sm btn-danger" data-del-cron="${j.ID}">Delete</button></td></tr>`).join('');
   const sess = s.sessions || [];
   $('#sessions-body').innerHTML = !sess.length
     ? '<tr><td colspan="5" class="muted">No active sessions.</td></tr>'
-    : sess.map((x) => `<tr><td class="mono">${x.chat_id}</td><td class="mono">${esc(x.model || '-')}</td><td>${x.message_count}</td><td class="muted">${esc(x.last_at)}</td><td><button class="btn btn-sm btn-ghost" data-view-sess="${x.chat_id}">View</button> <button class="btn btn-sm btn-danger" data-clear-sess="${x.chat_id}">Reset</button></td></tr>`).join('');
+    : sess.map((x) => `<tr><td class="mono">${x.chat_id}</td><td class="mono">${esc(x.model || '-')}</td><td>${x.message_count}</td><td class="muted">${esc(x.last_at)}</td><td><button class="btn btn-sm btn-ghost" data-open-chat="${x.chat_id}">Chat</button> <button class="btn btn-sm btn-ghost" data-view-sess="${x.chat_id}">View</button> <button class="btn btn-sm btn-danger" data-clear-sess="${x.chat_id}">Reset</button></td></tr>`).join('');
 }
 
 export async function loadChatPlayground() {
   const cid = Number($('#chat-pg-id')?.value || 1) || 1;
   const box = $('#chat-pg-messages');
   if (!box) return;
-  const data = await api(`/api/sessions/messages?chat_id=${encodeURIComponent(cid)}`);
+  const [data, acc, sessData] = await Promise.all([
+    api(`/api/sessions/messages?chat_id=${encodeURIComponent(cid)}`),
+    api('/api/accounts').catch(() => ({})),
+    api('/api/sessions').catch(() => ({ sessions: [] }))
+  ]);
+  const sel = $('#chat-pg-model');
+  if (sel) {
+    const prev = sel.value;
+    const opts = acc.model_options || (acc.models || []).map((m) => ({ ref: m, label: m }));
+    const curSess = (sessData.sessions || []).find((x) => Number(x.chat_id) === cid);
+    const preferred = prev || curSess?.model || acc.default_model || '';
+    sel.innerHTML = `<option value="">(Default: ${esc(acc.default_model || 'active')})</option>` +
+      opts.map((o) => `<option value="${esc(o.ref)}" ${o.ref === preferred ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+  }
   const msgs = (data.messages || []).filter((m) => (m.Role || m.role) === 'user' || (m.Role || m.role) === 'assistant');
   box.innerHTML = !msgs.length
     ? '<div class="muted" style="padding:12px;">Belum ada pesan di sesi ini. Kirim pesan di bawah untuk menguji agent.</div>'

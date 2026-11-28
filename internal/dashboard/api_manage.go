@@ -187,29 +187,71 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			Ref       string `json:"ref"`
 			Provider  string `json:"provider"`
 			Model     string `json:"model"`
+			Alias     string `json:"alias,omitempty"`
 			Context   int    `json:"context"`
 			MaxOutput int    `json:"max_output"`
 			Vision    bool   `json:"vision"`
 		}
+		type modelOption struct {
+			Ref   string `json:"ref"`
+			Label string `json:"label"`
+		}
 		var details []modelItem
+		var options []modelOption
+		detailIdx := map[string]int{}
 		seen := map[string]bool{}
-		addModel := func(pn, mn string, pc config.ProviderConfig) {
+		seenOpt := map[string]bool{}
+		addOption := func(ref, label string) {
+			if ref == "" || seenOpt[ref] {
+				return
+			}
+			seenOpt[ref] = true
+			options = append(options, modelOption{Ref: ref, Label: label})
+		}
+		addModel := func(pn, mn, alias string, pc config.ProviderConfig) {
 			if mn == "" {
 				return
 			}
 			ref := pn + ":" + mn
-			if seen[ref] {
+			if idx, exists := detailIdx[ref]; exists {
+				if alias != "" && details[idx].Alias == "" {
+					details[idx].Alias = alias
+				}
 				return
 			}
 			seen[ref] = true
 			mc := pc.ModelConfig(mn)
 			models = append(models, ref)
+			detailIdx[ref] = len(details)
 			details = append(details, modelItem{
-				Ref: ref, Provider: pn, Model: mn,
+				Ref: ref, Provider: pn, Model: mn, Alias: alias,
 				Context: mc.Context, MaxOutput: mc.MaxOutput, Vision: mc.Vision,
 			})
 		}
 		if cfg != nil {
+			anames := make([]string, 0, len(cfg.Aliases))
+			for a := range cfg.Aliases {
+				anames = append(anames, a)
+			}
+			sort.Strings(anames)
+			for _, a := range anames {
+				target := strings.TrimSpace(cfg.Aliases[a])
+				addOption(a, a+" ("+target+")")
+				if !seen[a] {
+					seen[a] = true
+					models = append(models, a)
+				}
+				if pcfg, mname, rerr := config.Resolve(a, cfg); rerr == nil {
+					pn := pcfg.Kind
+					if i := strings.Index(target, ":"); i > 0 {
+						pn = strings.TrimSpace(target[:i])
+					}
+					if pn == "" {
+						pn = "default"
+					}
+					addModel(pn, mname, a, pcfg)
+				}
+			}
 			pnames := make([]string, 0, len(cfg.Providers))
 			for pn := range cfg.Providers {
 				pnames = append(pnames, pn)
@@ -217,43 +259,36 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			sort.Strings(pnames)
 			for _, pn := range pnames {
 				pc := cfg.Providers[pn]
-				addModel(pn, pc.DefaultModel, pc)
+				addModel(pn, pc.DefaultModel, "", pc)
+				if pc.DefaultModel != "" {
+					addOption(pn+":"+pc.DefaultModel, pn+":"+pc.DefaultModel)
+				}
 				mnames := make([]string, 0, len(pc.Models))
 				for mn := range pc.Models {
 					mnames = append(mnames, mn)
 				}
 				sort.Strings(mnames)
 				for _, mn := range mnames {
-					addModel(pn, mn, pc)
-				}
-			}
-			anames := make([]string, 0, len(cfg.Aliases))
-			for a := range cfg.Aliases {
-				anames = append(anames, a)
-			}
-			sort.Strings(anames)
-			for _, a := range anames {
-				if !seen[a] {
-					seen[a] = true
-					models = append(models, a)
+					addModel(pn, mn, "", pc)
+					addOption(pn+":"+mn, pn+":"+mn)
 				}
 			}
 			if cfg.DefaultModel != "" && !seen[cfg.DefaultModel] {
 				if pcfg, mname, rerr := config.Resolve(cfg.DefaultModel, cfg); rerr == nil {
-					mc := pcfg.ModelConfig(mname)
-					seen[cfg.DefaultModel] = true
-					models = append(models, cfg.DefaultModel)
-					details = append(details, modelItem{
-						Ref: cfg.DefaultModel, Provider: pcfg.Kind, Model: mname,
-						Context: mc.Context, MaxOutput: mc.MaxOutput, Vision: mc.Vision,
-					})
+					pn := pcfg.Kind
+					if i := strings.Index(cfg.DefaultModel, ":"); i > 0 {
+						pn = strings.TrimSpace(cfg.DefaultModel[:i])
+					}
+					addModel(pn, mname, "", pcfg)
+					addOption(cfg.DefaultModel, cfg.DefaultModel)
 				} else {
 					models = append(models, cfg.DefaultModel)
+					addOption(cfg.DefaultModel, cfg.DefaultModel)
 				}
 			}
 			for _, fb := range cfg.Fallbacks {
 				fb = strings.TrimSpace(fb)
-				if fb == "" || seen[fb] {
+				if fb == "" || strings.EqualFold(fb, "auto") || seen[fb] {
 					continue
 				}
 				if pcfg, mname, rerr := config.Resolve(fb, cfg); rerr == nil {
@@ -261,7 +296,8 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 					if i := strings.Index(pn, ":"); i > 0 {
 						pn = pn[:i]
 					}
-					addModel(pn, mname, pcfg)
+					addModel(pn, mname, "", pcfg)
+					addOption(pn+":"+mname, pn+":"+mname)
 				}
 			}
 		}
@@ -273,6 +309,7 @@ func (s *Server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 			"accounts":      accounts,
 			"default_model": defModel,
 			"models":        models,
+			"model_options": options,
 			"model_details": details,
 		})
 		return

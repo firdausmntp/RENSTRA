@@ -58,10 +58,11 @@ type Runner struct {
 	SubagentCall       func(ctx context.Context, task string) (string, error)
 	Logger             *slog.Logger
 
-	mu           sync.Mutex
-	cachedPrompt string
-	locks        *chatLockRegistry
-	fbHealth     *fallbackHealth
+	mu             sync.Mutex
+	cachedPrompt   string
+	cachedMemStamp int64
+	locks          *chatLockRegistry
+	fbHealth       *fallbackHealth
 }
 
 // Run executes one user turn.
@@ -144,18 +145,7 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 				stats.ContextUsed = EstimateRequestTokens(r.system(), defs, history)
 			}
 		}
-		if r.Logger != nil && chatID != 0 && chatID < 1_000_000_000_000_000 {
-			r.Logger.Info("turn_finished",
-				"chat_id", chatID,
-				"model", r.GetModel(),
-				"status", status,
-				"duration_ms", time.Since(turnStarted).Milliseconds(),
-				"tokens_in", turnTokensIn,
-				"tokens_out", turnTokensOut,
-				"tool_calls", turnToolCalls,
-				"error", errMsg,
-			)
-		}
+		r.logTurnFinish(turnID, chatID, status, iterCount, time.Since(turnStarted), turnTokensIn, turnTokensOut, lastUsageIn, turnToolCalls, turnCost, errMsg)
 		if turnID <= 0 {
 			return
 		}
@@ -176,25 +166,14 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		maxIters = defaultMaxIters
 	}
 
-	var lastSig string
-	var repeatCount int
+	lg := &loopGuard{}
 	var stepsLog []string
 	activePhase := ""
 	phaseStart := turnStarted
-
-	var recalledFacts string
-	if r.Store != nil {
-		scope := fmt.Sprintf("chat:%d", chatID)
-		if facts, ferr := r.Store.SearchMemoryFacts(ctx, scope, userText, 3); ferr == nil && len(facts) > 0 {
-			var fb strings.Builder
-			fb.WriteString("\n[Memori Relevan Otomatis (Smart Memory):\n")
-			for _, f := range facts {
-				fmt.Fprintf(&fb, "- #%d: %s\n", f.ID, f.Content)
-			}
-			fb.WriteString("]")
-			recalledFacts = fb.String()
-		}
-	}
+	recalledFacts := r.recallFactsBlock(ctx, chatID, userText)
+	r.logTurnStart(turnID, chatID, maxIters, len(history), userText)
+	compactedThisTurn := false
+	repeatedNarration := false
 
 	for i := 0; i < maxIters; i++ {
 		iterCount = i + 1
@@ -208,35 +187,33 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		if win <= 0 {
 			win = 32000
 		}
-		sysPrompt := r.system()
-		if recalledFacts != "" {
-			sysPrompt += recalledFacts
-		}
 		var toolDefs []provider.ToolDef
 		if r.Tools != nil {
 			toolDefs = r.Tools.Defs()
 		}
-		if !r.DisableAutoCompact && ShouldCompactRequest(sysPrompt, toolDefs, history, win, r.threshold()) {
+		basePrompt := r.system()
+		if !r.DisableAutoCompact && CanCompact(history, keepTurns) && ShouldCompactRequest(basePrompt+recalledFacts, toolDefs, history, win, r.threshold()) {
 			summary := r.summarize(ctx, history)
 			if compacted, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err == nil && len(compacted) > 0 {
 				history = compacted
 			} else {
 				history = CompactHistory(history, keepTurns, summary)
 			}
+			compactedThisTurn = true
 		}
 
-		if i == 0 && userCount > 0 && userCount%12 == 0 && r.Memory != nil {
-			sysPrompt += "\n[pengingat sistem: jika ada fakta penting baru tentang user atau keputusan jangka panjang, perbarui tool memory; jika ada prosedur baru, simpan ke tool skill]"
-		}
-		if i >= maxIters-3 {
-			sysPrompt += fmt.Sprintf("\n[PERINGATAN LONG-HORIZON: ini iterasi %d/%d. Segera selesaikan langkah saat ini dan tulis ringkasan final untuk user!]", iterCount, maxIters)
-		} else if dl, ok := ctx.Deadline(); ok && time.Until(dl) < 90*time.Second {
-			sysPrompt += fmt.Sprintf("\n[PERINGATAN WAKTU: sisa waktu turn %s. Segera rangkum hasil sejauh ini dan laporkan ke user!]", time.Until(dl).Truncate(time.Second))
+		sysPrompt := r.buildTurnPrompt(ctx, iterCount, maxIters, userCount, recalledFacts, compactedThisTurn, repeatedNarration, history)
+		compactedThisTurn = false
+		repeatedNarration = false
+
+		reqHistory, masked, folded := PrepareRequestHistory(sysPrompt, toolDefs, history, win, r.threshold())
+		if (masked > 0 || folded > 0) && r.Logger != nil {
+			r.Logger.Info("context_pruned", "chat_id", chatID, "iter", iterCount, "masked_tools", masked, "folded_msgs", folded)
 		}
 
 		activePhase = fmt.Sprintf("menunggu respons model %s (%s)", primary.Model, primary.Provider.Name())
 		phaseStart = time.Now()
-		res, err := r.streamWithFallback(ctx, sysPrompt, history)
+		res, err := r.streamWithFallback(ctx, sysPrompt, reqHistory)
 		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) && (tool.WasChatDelivered(ctx, chatID) || tool.WasChatDelivered(ctx, origChatID)) {
 				return "", nil
@@ -285,14 +262,32 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 			r.recordUsageWithPrices(usage, res.model, res.priceIn, res.priceOut)
 		}
 		turnToolCalls += len(calls)
+		r.logLLMStep(turnID, chatID, iterCount, res, time.Since(phaseStart))
 
 		if len(calls) == 0 {
+			if tool.IsDuplicateDelivery(ctx, chatID, text) || tool.IsDuplicateDelivery(ctx, origChatID, text) {
+				return "", nil
+			}
 			if r.Limits.WarnDailyUSD > 0 {
 				if u, uerr := r.Store.UsageForDay(ctx, today); uerr == nil && u.CostUSD >= r.Limits.WarnDailyUSD {
 					text += fmt.Sprintf("\n\n⚠️ Peringatan biaya: penggunaan hari ini $%.4f telah melewati batas peringatan ($%.2f).", u.CostUSD, r.Limits.WarnDailyUSD)
 				}
 			}
 			return text, nil
+		}
+
+		if rep, stopRep := lg.checkAssistantText(text); rep {
+			repeatedNarration = true
+			if r.Logger != nil {
+				r.Logger.Warn("loop_guard_repeated_text", "chat_id", chatID, "iter", iterCount, "hard_stop", stopRep)
+			}
+			if stopRep {
+				r.fillCancelledTools(chatID, calls)
+				if tool.WasChatDelivered(ctx, chatID) || tool.WasChatDelivered(ctx, origChatID) {
+					return "", nil
+				}
+				return "", errors.New("eksekusi dihentikan otomatis karena model terus mengulang pesan yang sama tanpa progres baru")
+			}
 		}
 
 		for idx, call := range calls {
@@ -304,16 +299,23 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 				return text, wrapTimeoutErr(ctx.Err(), activePhase, phaseStart, iterCount, r.TurnTimeout)
 			}
 			stepsLog = append(stepsLog, call.Name)
-			sig := call.Name + ":" + strings.TrimSpace(call.Arguments)
-			if sig == lastSig {
-				repeatCount++
-			} else {
-				lastSig = sig
-				repeatCount = 1
+			loopWarn, hardStop := lg.checkCall(call.Name, call.Arguments)
+			if hardStop {
+				r.fillCancelledTools(chatID, calls[idx:])
+				if r.Logger != nil {
+					r.Logger.Warn("loop_guard_hard_stop", "chat_id", chatID, "tool", call.Name, "iter", iterCount, "reason", loopWarn)
+				}
+				if tool.WasChatDelivered(ctx, chatID) || tool.WasChatDelivered(ctx, origChatID) {
+					return "", nil
+				}
+				return "", errors.New(loopWarn)
 			}
 			var result string
-			if repeatCount >= 3 {
-				result = "[loop terdeteksi: tool " + call.Name + " dengan argumen identik sudah dipanggil 3 kali berturut-turut. Hentikan pengulangan dan berikan jawaban akhir atau gunakan cara lain.]"
+			if loopWarn != "" {
+				if r.Logger != nil {
+					r.Logger.Warn("loop_guard_warning", "chat_id", chatID, "tool", call.Name, "iter", iterCount)
+				}
+				result = loopWarn
 			} else {
 				activePhase = describeToolPhase(call.Name, call.Arguments)
 				phaseStart = time.Now()
@@ -328,6 +330,23 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 						return "", nil
 					}
 					return text, wrapTimeoutErr(ctx.Err(), activePhase, phaseStart, iterCount, r.TurnTimeout)
+				}
+				if stagWarn, stagStop := lg.recordResult(call.Name, result); stagWarn != "" {
+					if r.Logger != nil {
+						r.Logger.Warn("loop_guard_stagnant", "chat_id", chatID, "tool", call.Name, "iter", iterCount, "hard_stop", stagStop)
+					}
+					if stagStop {
+						msg := provider.Message{Role: provider.RoleTool, Content: result + "\n" + stagWarn, ToolCallID: call.ID}
+						_, _ = r.appendWithFallback(ctx, chatID, msg)
+						if idx+1 < len(calls) {
+							r.fillCancelledTools(chatID, calls[idx+1:])
+						}
+						if tool.WasChatDelivered(ctx, chatID) || tool.WasChatDelivered(ctx, origChatID) {
+							return "", nil
+						}
+						return "", errors.New(stagWarn)
+					}
+					result += stagWarn
 				}
 			}
 			msg := provider.Message{Role: provider.RoleTool, Content: result, ToolCallID: call.ID}
@@ -344,46 +363,4 @@ func (r *Runner) Run(ctx context.Context, chatID int64, userText string) (resTex
 		return "", fmt.Errorf("batas iterasi (%d) tercapai setelah %d tool (%s); ketik `lanjut` bila ingin meneruskan", maxIters, len(stepsLog), strings.Join(lastN(stepsLog, 5), ", "))
 	}
 	return "", fmt.Errorf("batas iterasi (%d) tercapai tanpa jawaban akhir", maxIters)
-}
-
-func lastN(items []string, n int) []string {
-	if len(items) <= n {
-		return items
-	}
-	return items[len(items)-n:]
-}
-
-// ForceCompact forces a history summarization and compaction for the given chatID.
-func (r *Runner) ForceCompact(ctx context.Context, chatID int64) (string, error) {
-	unlock := r.lockChat(chatID)
-	defer unlock()
-
-	history, err := r.Store.Messages(ctx, chatID)
-	if err != nil {
-		return "", err
-	}
-	if len(history) <= keepTurns {
-		return "pesan belum cukup banyak untuk dikompaksi", nil
-	}
-	summary := r.summarize(ctx, history)
-	if _, err := r.Store.Compact(ctx, chatID, keepTurns, summary); err != nil {
-		return "", err
-	}
-	return summary, nil
-}
-
-func (r *Runner) threshold() float64 {
-	if r.Threshold <= 0 {
-		return compactThreshold
-	}
-	return r.Threshold
-}
-
-func autoScaleContextWindow(inputTokens int) int {
-	for _, tier := range []int{64000, 128000, 200000, 400000, 1000000, 2000000} {
-		if inputTokens < tier {
-			return tier
-		}
-	}
-	return inputTokens * 2
 }

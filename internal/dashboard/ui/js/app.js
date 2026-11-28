@@ -1,8 +1,8 @@
-import { state, $, $$, api, toast, updateErrBadge } from './api.js?v=1.4.0';
+import { state, $, $$, api, toast, esc, updateErrBadge } from './api.js?v=1.4.5';
 import {
   loadOverview, loadLogs, renderLogs,
   loadSkills, renderSkills, loadMemory, loadAccounts, loadCronAndSessions, loadChatPlayground
-} from './views.js?v=1.4.0';
+} from './views.js?v=1.4.5';
 
 function openDrawer(open) {
   $('#sidebar').classList.toggle('open', open);
@@ -131,6 +131,21 @@ $('#log-list')?.addEventListener('click', (e) => {
   const entry = (state.filteredLogs || [])[Number(row.dataset.logIdx)];
   if (!entry) return;
   $('#log-detail-title').textContent = `${entry.level || 'INFO'}: ${entry.message || 'Log Entry'}`;
+  const sumBox = $('#log-detail-summary');
+  if (sumBox) {
+    const attrs = entry.attrs || {};
+    const pairs = [
+      ['Time', entry.time || '-'],
+      ['Level', entry.level || 'INFO'],
+      ['Event', entry.message || '-'],
+      ...Object.entries(attrs).filter(([, v]) => v !== '' && v !== null && v !== undefined)
+    ];
+    sumBox.innerHTML = pairs.map(([k, v]) => {
+      const val = typeof v === 'string' ? v : JSON.stringify(v);
+      const isErr = k === 'error' || k === 'err';
+      return `<div class="list-item" style="padding:6px 10px;gap:12px;"><span class="mono muted" style="min-width:120px;">${esc(k)}</span><span class="mono ${isErr ? 'text-red' : ''}" style="word-break:break-word;white-space:pre-wrap;flex:1;">${esc(val)}</span></div>`;
+    }).join('');
+  }
   $('#log-detail-body').textContent = JSON.stringify(entry, null, 2);
   $('#log-detail-modal').classList.add('open');
   $('#log-detail-modal').setAttribute('aria-hidden', 'false');
@@ -384,7 +399,11 @@ function closeCronModal() {
   $('#cron-modal').classList.remove('open');
   $('#cron-modal').setAttribute('aria-hidden', 'true');
 }
-$('#btn-cron-new').addEventListener('click', () => openCronModal(null));
+$('#btn-cron-new').addEventListener('click', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  openCronModal(null);
+});
 $('#btn-cron-close').addEventListener('click', closeCronModal);
 $('#btn-cron-cancel').addEventListener('click', closeCronModal);
 $('#form-cron').addEventListener('submit', async (e) => {
@@ -429,6 +448,13 @@ $('#btn-transcript-close')?.addEventListener('click', () => {
 });
 
 $('#sessions-body').addEventListener('click', async (e) => {
+  const openChatId = e.target.dataset.openChat;
+  if (openChatId) {
+    if ($('#chat-pg-id')) $('#chat-pg-id').value = openChatId;
+    if ($('#chat-pg-model')) $('#chat-pg-model').value = '';
+    activateTab('chat', true);
+    return;
+  }
   const viewId = e.target.dataset.viewSess;
   if (viewId) {
     const data = await api(`/api/sessions/messages?chat_id=${encodeURIComponent(viewId)}`);
@@ -517,14 +543,15 @@ $('#btn-chat-clear')?.addEventListener('click', async () => {
 $('#form-chat-pg')?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const cid = Number($('#chat-pg-id')?.value || 1) || 1;
+  const model = $('#chat-pg-model')?.value || '';
   const inp = $('#chat-pg-input');
   const prompt = inp.value.trim();
   if (!prompt) return;
   inp.value = '';
   $('#btn-chat-send').disabled = true;
-  $('#chat-pg-status').textContent = 'Thinking...';
+  $('#chat-pg-status').textContent = model ? `Thinking (${model})...` : 'Thinking...';
   try {
-    await api('/api/chat', { method: 'POST', body: JSON.stringify({ chat_id: cid, prompt }) });
+    await api('/api/chat', { method: 'POST', body: JSON.stringify({ chat_id: cid, prompt, model }) });
     await loadChatPlayground();
   } finally {
     $('#btn-chat-send').disabled = false;

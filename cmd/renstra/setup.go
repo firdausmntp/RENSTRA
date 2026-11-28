@@ -113,8 +113,8 @@ func setupCmd() error {
 	} else {
 		b.WriteString("  # system_prompt_prefix: \"kamu asisten pribadi yang ringkas dan langsung\"\n")
 	}
-	b.WriteString("  max_iterations: 40\n")
-	b.WriteString("  max_turn_timeout: 15m\n")
+	b.WriteString("  max_iterations: 80\n")
+	b.WriteString("  max_turn_timeout: 30m\n")
 	b.WriteString("  file_retention_days: 14\n")
 	b.WriteString("  # aux_model: \"utama:gpt-4o-mini\"   # model untuk kompaksi (default = model utama)\n")
 	b.WriteString("  auto_compact: true\n")
